@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 from datetime import datetime, timezone
-import getpass
 import json
 import sys
 from typing import Sequence
@@ -25,14 +24,23 @@ def _login() -> None:
     if vault.load() is not None:
         raise RuntimeError("A session exists already. Use logout before logging in again.")
     _interactive_only()
-    print("Create your API ID and API hash at https://my.telegram.org")
-    api_id = int(input("API ID: ").strip())
-    api_hash = getpass.getpass("API hash (hidden): ").strip()
-    phone = getpass.getpass("Telegram phone (+countrycode, hidden): ").strip()
+    from chatpulse.login_wizard import LoginWizard
+
+    wizard = LoginWizard()
+    api_id, api_hash, phone = wizard.application()
+    print("\\nStep 3 of 3: Telegram verification")
+    print("  Connecting and requesting a code... (network connection may take time)", flush=True)
     asyncio.run(login(
-        vault, api_id=api_id, api_hash=api_hash, phone=phone,
-        prompt_code=lambda: getpass.getpass("Login code (hidden): "),
-        prompt_password=lambda: getpass.getpass("2FA password (hidden): "),
+        vault,
+        api_id=api_id, api_hash=api_hash, phone=phone,
+        prompt_code=wizard.code,
+        prompt_password=wizard.password,
+        on_progress=lambda stage: print({
+            "connected": "  Connected. Requesting one-time code...",
+            "code_sent": "  Code requested. Check Telegram service chat, SMS or login email.",
+            "verifying": "  Verifying the code...",
+            "storing": "  Authorized. Saving to your OS credential vault...",
+        }[stage], flush=True),
     ))
     print("Telegram session stored in your OS credential vault.")
 
