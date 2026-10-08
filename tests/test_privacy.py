@@ -1,0 +1,57 @@
+from datetime import datetime, timezone
+import json
+import unittest
+
+from chatpulse.privacy import RawMessage, redact_text, sanitize_messages, validate_ollama_url
+
+
+class PrivacyTests(unittest.TestCase):
+    def test_metadata_excluded_but_tone_preserved(self):
+        records = [RawMessage(456798, "Алексей",
+                    datetime(2026, 10, 8, 12, 30, tzinfo=timezone.utc),
+                    "Алексей сказал бля")]
+        payload = json.dumps(
+            [m.as_payload() for m in sanitize_messages(records, timezone="Europe/Moscow")],
+            ensure_ascii=False,
+        )
+        self.assertNotIn("456798", payload)
+        self.assertNotIn("Алексей", payload)
+        self.assertIn("Participant 1", payload)
+        self.assertIn("бля", payload)
+        self.assertIn("15:30", payload)
+
+    def test_text_identifier_patterns(self):
+        result = redact_text(
+            "Write name@example.com @exampleuser or https://t.me/exampleuser "
+            "phone +7 (999) 123-45-67"
+        )
+        for secret in ("name@example.com", "@exampleuser", "https://t.me", "123-45-67"):
+            self.assertNotIn(secret, result)
+
+    def test_naive_time_rejected(self):
+        with self.assertRaises(ValueError):
+            sanitize_messages(
+                [RawMessage(1, "User", datetime(2026, 10, 8), "hi")], timezone="UTC"
+            )
+
+    def test_loopback_only(self):
+        for accepted in ("http://127.0.0.1:11434", "http://[::1]:11434"):
+            self.assertEqual(validate_ollama_url(accepted), accepted)
+        for rejected in (
+            "https://127.0.0.1:11434", "http://localhost:11434",
+            "http://192.168.1.5:11434", "http://8.8.8.8:11434",
+            "http://127.0.0.1:11434/api", "http://u:p@127.0.0.1:11434",
+            "http://127.0.0.1:11434?x=1", "http://127.0.0.1",
+        ):
+            with self.subTest(url=rejected), self.assertRaises(ValueError):
+                validate_ollama_url(rejected)
+
+    def test_explicit_aliases(self):
+        self.assertEqual(
+            redact_text("Серёга говорил с Саней", ["Серёга", "Саней"]),
+            "[person] говорил с [person]",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
