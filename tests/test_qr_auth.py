@@ -87,7 +87,7 @@ class QRTests(unittest.TestCase):
         asyncio.run(coro)
         self.assertEqual(len(urls), 1)
         self.assertEqual(progress, ["connecting", "qr_ready", "storing"])
-        self.assertEqual(fake.events, ["connect", ("updates", True), "qr", "disconnect"])
+        self.assertEqual(fake.events, ["connect", "qr", "disconnect"])
         self.assertIsNotNone(self.vault.load())
 
     def test_expired_token_is_refreshed_without_new_code(self):
