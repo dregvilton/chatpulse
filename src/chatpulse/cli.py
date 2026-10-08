@@ -94,6 +94,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.", file=sys.stderr)
         return 130
+    except TimeoutError:
+        print(
+            "Telegram did not respond in time. Check your connection. "
+            "A code may still arrive; avoid repeatedly requesting new ones.",
+            file=sys.stderr,
+        )
+        return 1
     except Exception:
         # Telethon and OS keyring errors can contain phone numbers, codes or
         # credential backends' details. Never echo raw exception strings.
