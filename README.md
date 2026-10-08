@@ -101,11 +101,14 @@ restarted; merely connecting to `localhost` is *not* enough.
 ```sh
 # After configuring ~/.ollama/server.json and pulling a local model yourself:
 chatpulse local-models
-chatpulse digest --model qwen3:4b-instruct --date 2026-10-08
+chatpulse digest --model huihui_ai/qwen3-abliterated:8b
+chatpulse digest --model huihui_ai/qwen3-abliterated:8b --date 2026-10-08 \\
+  --from-time 07:00 --to-time 19:30
 # Optional: --tone neutral
 ```
 
-The digest uses the approved group's 07:00–18:00 window, redacts and
+The digest uses today's messages until invocation by default, or an explicit
+local time range, redacts and
 pseudonymizes messages before local inference, and prints the result
 **only to your terminal**. It never uploads, sends to Telegram, or saves
 chat content. Large chats are summarized in bounded stages.
