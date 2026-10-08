@@ -21,13 +21,13 @@ This feature is **opt-in**. `chatpulse preview` never invokes an LLM.
    Ollama docs: https://docs.ollama.com/faq#how-do-i-disable-ollama-cloud-features
 
 3. Deliberately download a **local model** suitable for your memory. For
-   example, `ollama pull qwen3:4b` (the actual model may be changed).
+   example, `ollama pull qwen3:4b-instruct` (the actual model may be changed).
    This download contacts Ollama's model registry; only subsequent
    inference is local. ChatPulse never downloads models automatically.
 4. Run `chatpulse local-models`. It requires the cloud-disabled config and
    lists eligible downloaded models. Remote aliases and names containing
    `cloud` are excluded.
-5. Run `chatpulse digest --date 2026-10-08 --model qwen3:4b`.
+5. Run `chatpulse digest --date 2026-10-08 --model qwen3:4b-instruct`.
    Use `--tone friends` (default) or `--tone neutral`.
 
 The entire command reads **only the previously approved chat**, in
