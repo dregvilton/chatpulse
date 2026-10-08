@@ -28,7 +28,7 @@ def _login() -> None:
 
     wizard = LoginWizard()
     api_id, api_hash, phone = wizard.application()
-    print("\\nStep 3 of 3: Telegram verification")
+    print("\nStep 3 of 3: Telegram verification")
     print("  Connecting and requesting a code... (network connection may take time)", flush=True)
     asyncio.run(login(
         vault,
