@@ -5,7 +5,7 @@ This module does not read dialogs/messages, and does not contact any LLM.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from chatpulse.credentials import CredentialVault, TelegramCredentials
@@ -33,9 +33,10 @@ async def login(
     api_id: int,
     api_hash: str,
     phone: str,
-    prompt_code: Callable[[], str],
-    prompt_password: Callable[[], str],
+    prompt_code: Callable[[], Awaitable[str]],
+    prompt_password: Callable[[], Awaitable[str]],
     client_factory: Callable[[int, str, str], Any] = _make_client,
+    on_progress: Callable[[str], None] | None = None,
 ) -> None:
     """Only persist the session *after* Telegram confirms authorization."""
     import re
@@ -51,19 +52,28 @@ async def login(
     client = client_factory(api_id, api_hash, "")
     try:
         await client.connect()
+        if on_progress is not None:
+            on_progress("connected")
         sent = await client.send_code_request(phone)
+        if on_progress is not None:
+            on_progress("code_sent")
+        code = await prompt_code()
+        if on_progress is not None:
+            on_progress("verifying")
         try:
             await client.sign_in(
-                phone=phone, code=prompt_code(), phone_code_hash=sent.phone_code_hash
+                phone=phone, code=code, phone_code_hash=sent.phone_code_hash
             )
         except Exception as exc:
             from telethon.errors import SessionPasswordNeededError
 
             if not isinstance(exc, SessionPasswordNeededError):
                 raise
-            await client.sign_in(password=prompt_password())
+            await client.sign_in(password=await prompt_password())
         if not await client.is_user_authorized():
             raise TelegramAuthError("Telegram did not authorize this session")
+        if on_progress is not None:
+            on_progress("storing")
         session = client.session.save()
         if not session:
             raise TelegramAuthError("No session was returned")
