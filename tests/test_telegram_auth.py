@@ -32,6 +32,14 @@ class FakeClient:
         return self.revoke_ok
 
 
+async def fake_code():
+    return "12345"
+
+
+async def fake_password():
+    return "secret"
+
+
 class AuthTests(unittest.TestCase):
     def setUp(self):
         self.backend = FakeKeyring()
@@ -47,7 +55,7 @@ class AuthTests(unittest.TestCase):
     def do_login(self, phone="+79991234567"):
         return asyncio.run(login(
             self.vault, api_id=123, api_hash="a" * 32, phone=phone,
-            prompt_code=lambda: "12345", prompt_password=lambda: "secret",
+            prompt_code=fake_code, prompt_password=fake_password,
             client_factory=self.factory,
         ))
 
@@ -82,6 +90,34 @@ class AuthTests(unittest.TestCase):
             ["connect", "request", "signin", "logout", "disconnect"],
         )
         self.assertIsNone(self.vault.load())
+
+
+    def test_login_progress_does_not_contain_secret(self):
+        messages = []
+        asyncio.run(login(
+            self.vault, api_id=123, api_hash="a" * 32,
+            phone="+79991234567", prompt_code=fake_code,
+            prompt_password=fake_password, client_factory=self.factory,
+            on_progress=messages.append,
+        ))
+        self.assertEqual(messages, ["connected", "code_sent", "verifying", "storing"])
+        rendered = "\\n".join(messages)
+        self.assertNotIn("+79991234567", rendered)
+        self.assertNotIn("a" * 32, rendered)
+
+    def test_cancel_prompt_disconnects(self):
+        async def cancel():
+            raise EOFError("cancelled")
+
+        with self.assertRaises(EOFError):
+            asyncio.run(login(
+                self.vault, api_id=123, api_hash="a" * 32,
+                phone="+79991234567", prompt_code=cancel,
+                prompt_password=fake_password, client_factory=self.factory,
+            ))
+        self.assertEqual(self.clients[0].events, [
+            "connect", "request", "disconnect",
+        ])
 
     def test_remote_failure_keeps_vault(self):
         self.do_login()
