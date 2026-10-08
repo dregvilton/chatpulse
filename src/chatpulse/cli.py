@@ -26,7 +26,7 @@ def main() -> None:
                        "Бля, опять тысяча сообщений!"),
         ]
         safe = sanitize_messages(messages, timezone="UTC")
-        print(json.dumps([m.as_payload() for m in safe], ensure_ascii=False, indent=2))
+        print(json.dumps([m.as_payload() for m in safe], ensure_ascii=True, indent=2))
 
 
 if __name__ == "__main__":
