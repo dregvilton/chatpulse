@@ -1,26 +1,54 @@
 # Security and privacy
 
-## Boundaries
+## Trust boundaries
 
-1. Telegram is external: fetching history or sending summaries contacts Telegram.
-2. Future Telethon sessions carry the **full permissions of the logged-in Telegram account**. An application chat allowlist is not a security sandbox. A stolen session can expose other chats.
-3. Only `SafeMessage` projections may enter a local model prompt; do not forward raw Telegram objects, account details, contacts, files or location payloads.
-4. Only numeric HTTP loopback is allowed for the model endpoint; future HTTP client must independently enforce this, disable environment proxies and refuse redirects.
-5. **Loopback is not enough:** Ollama supports cloud-hosted models. Future integration must require cloud features disabled (`OLLAMA_NO_CLOUD=1`) and refuse models marked as cloud/remote. This is NOT implemented in this foundation.
-6. No telemetry, raw message logs or session material in repository, CI, exceptions or prompts.
-7. Message authors are pseudonymized, not reliably anonymized. Names, places, distinctive events and rephrased identifiers may survive text filtering.
+1. Telegram itself is external: login, fetching history and delivering
+   digests contact Telegram. Only a person who deliberately authorizes an
+   account should use this tool.
+2. A user session has the **full privileges of the logged-in Telegram
+   account**. A ChatPulse chat allowlist is a safeguard against accidental
+   selection, not an access-control sandbox for a stolen session.
+3. **Secret storage:** a native OS credential store only. The session
+   auth key (Telethon StringSession) and API hash are stored in Keychain,
+   Credential Manager or supported Linux Secret Service/KWallet. Refuse
+   third-party/plaintext/keyring chainer backends. No .session files.
+4. OS keyrings are not protection against malware running with the same
+   user privileges. A compromised Python interpreter or OS account could
+   still access stored secrets; review packages before installation.
+5. **Model input (planned):** only safe model-facing projections;
+   never send raw Telegram objects, ID, contacts, files or location payloads.
+6. **Local inference (planned):** numeric loopback-only model origin, no
+   redirects or environment proxy usage. Loopback alone is insufficient:
+   Ollama supports remotely hosted models. The future adapter must require
+   cloud disabled and refuse cloud model names before digest features launch.
+7. No analytics or telemetry. No logs or exception strings containing
+   message texts, session keys, names, API hashes, phone, codes or passwords.
+8. Redaction is best effort, **not guaranteed anonymity**. Chat references,
+   local slang, rare names or indirectly identifying events can remain.
+9. Telegram digest delivery necessarily transmits the resulting text to
+   Telegram, so sending must be an explicit, configured operation.
 
-## Planned safeguards
+## Auth flows
 
-- Explicit authorized chat IDs and time windows, default read-only.
-- OS-specific protected session storage, restrictive permissions and explicit logout.
-- No model downloads during digest execution. User provisions models themselves.
-- Local-only model, no cloud provider fallback, no redirects and no environment proxies.
-- Prompt-injection-resistant prompt structure. No LLM-controlled tools or network calls.
-- CLI preview and deliberate output destination: sending digest to Telegram is an external transmission.
-- Fault and error logs must not contain message content.
-- No persistent raw history by default.
+- `chatpulse login`: collect credentials interactively; connect directly to
+  Telegram; persist session to OS keyring **after** successful authorization;
+  avoid session-file creation; no dialog discovery.
+- `chatpulse status`: checks existence of OS secret **only**, no network.
+- `chatpulse logout`: revoke the Telegram authorization first and delete
+  local secret after confirmation. On network failure retain secret and
+  instruct revocation in Telegram > Settings > Devices.
 
-## Vulnerability reports
+## Pending before first real digest
 
-Do not publish actual sessions, API credentials or private chat excerpts in issues. Contact repository owner privately before disclosure.
+- Explicit approved chat/entity resolution with no dialog enumeration;
+  limited history scope, dry-run and non-LLM fixture tests.
+- Stronger redaction tests and prompt-injection isolation.
+- Local Ollama adapter, disable cloud features, refuse remote models,
+  proxies and redirects; never automatically download models.
+- Large context handling, final delivery guard and production review.
+- Packaging supply-chain checks, secret scan and robust version pinning.
+
+## Vulnerability reporting
+
+Do not include API hashes, Telethon sessions, real private chats or other
+secrets in public GitHub issues. Contact repository maintainers privately.

@@ -10,7 +10,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "ChatPulse contributors"}]
-dependencies = ["tzdata>=2025.1; sys_platform == 'win32'"]
+dependencies = [
+    "telethon>=1.45,<2",
+    "keyring>=25.6,<26",
+    "prompt_toolkit>=3.0.53,<4",
+    "qrcode>=8,<9",
+    "tzdata>=2025.1; sys_platform == 'win32'",
+]
 
 [project.scripts]
 chatpulse = "chatpulse.cli:main"
