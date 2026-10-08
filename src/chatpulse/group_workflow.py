@@ -34,7 +34,7 @@ class PreviewStats:
 
 
 def resolve_window(
-    *, day: date | None, now: datetime,
+    *, now: datetime, day: date | None = None,
     from_time: time | None = None, to_time: time | None = None,
 ) -> DigestWindow:
     """Today is a snapshot until invocation; past days cover full calendar day.
