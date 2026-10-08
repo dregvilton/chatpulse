@@ -1,6 +1,6 @@
 """Fake Telethon flows prove consent, vault selection and data minimization."""
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -9,7 +9,7 @@ from telethon.tl.types import InputPeerChannel, InputPeerChat
 
 from chatpulse.credentials import CredentialVault, SecureStorageError, TelegramCredentials
 from chatpulse.group_workflow import (
-    approve_group, most_recent_completed_day, preview_selected_group,
+    approve_group, resolve_window, preview_selected_group,
 )
 from chatpulse.selection import SelectedChat
 from tests.fakes import FakeKeyring
@@ -128,10 +128,11 @@ class GroupWorkflowTests(unittest.TestCase):
             self.vault, day=date(2026, 10, 8), client_factory=self.factory,
             now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
         ))
-        self.assertEqual(stats.messages, 2)
+        self.assertEqual(stats.messages, 3)
         self.assertEqual(stats.participants, 2)
-        self.assertEqual((stats.first_time, stats.last_time), ("14:00", "17:00"))
-        self.assertTrue(stats.window_finished)
+        self.assertEqual((stats.first_time, stats.last_time), ("06:00", "17:00"))
+        self.assertFalse(stats.window_finished)
+        self.assertEqual((stats.window_start, stats.window_end), ("00:00", "19:00"))
         self.assertEqual(self.client.allowed_peer.channel_id, 555)
         self.assertEqual(self.client.allowed_peer.access_hash, -777)
         self.assertEqual(self.client.events[-1], "disconnect")
@@ -158,16 +159,57 @@ class GroupWorkflowTests(unittest.TestCase):
         with self.assertRaises(SecureStorageError):
             self.vault.load_selected_chat()
 
-    def test_previous_full_window_default(self):
-        self.assertEqual(
-            most_recent_completed_day(datetime(2026, 10, 8, 10, tzinfo=timezone.utc)),
-            date(2026, 10, 7),
-        )
-        self.assertEqual(
-            most_recent_completed_day(datetime(2026, 10, 8, 13, tzinfo=timezone.utc)),
-            date(2026, 10, 8),
-        )
+    def test_today_includes_messages_after_1800(self):
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        self.client.messages = [
+            fake_msg(14, "19:00", 3),
+            fake_msg(13, "18:00", 2),
+            fake_msg(12, "17:00", 1),
+        ]
+        stats = asyncio.run(preview_selected_group(
+            self.vault, day=date(2026, 10, 8), client_factory=self.factory,
+            now=datetime(2026, 10, 8, 14, 45, tzinfo=timezone.utc),
+            from_time=time(7),
+        ))
+        self.assertEqual(stats.messages, 3)
+        self.assertEqual(stats.window_start, "07:00")
+        self.assertEqual(stats.window_end, "19:45")
 
+    def test_past_date_full_day_and_explicit_end(self):
+        now = datetime(2026, 10, 9, 14, tzinfo=timezone.utc)
+        window = resolve_window(day=date(2026, 10, 8), now=now)
+        self.assertEqual(window.start.strftime("%Y-%m-%d %H:%M"),
+                         "2026-10-08 00:00")
+        self.assertEqual(window.end.strftime("%Y-%m-%d %H:%M"),
+                         "2026-10-09 00:00")
+        bounded = resolve_window(
+            day=date(2026, 10, 8), now=now,
+            from_time=time(7), to_time=time(19, 30),
+        )
+        self.assertTrue(bounded.contains(datetime(
+            2026, 10, 8, 14, tzinfo=timezone.utc)))
+        self.assertFalse(bounded.contains(datetime(
+            2026, 10, 8, 15, tzinfo=timezone.utc)))
+
+    def test_invalid_future_window_fails_before_network(self):
+        now = datetime(2026, 10, 8, 14, tzinfo=timezone.utc)
+        cases = [
+            {"day": date(2026, 10, 9)},
+            {"day": date(2026, 10, 8), "to_time": time(20)},
+            {"day": date(2026, 10, 8), "from_time": time(20)},
+            {"day": date(2026, 10, 8), "from_time": time(18),
+             "to_time": time(17)},
+        ]
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                resolve_window(now=now, **case)
+
+    def test_tz_aware_times_rejected(self):
+        with self.assertRaises(ValueError):
+            resolve_window(
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                from_time=time(7, tzinfo=timezone.utc),
+            )
 
 if __name__ == "__main__":
     unittest.main()
