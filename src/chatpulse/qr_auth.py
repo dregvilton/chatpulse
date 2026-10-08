@@ -11,7 +11,21 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from chatpulse.credentials import CredentialVault, TelegramCredentials
-from chatpulse.telegram_auth import TelegramAuthError, _make_client
+from chatpulse.telegram_auth import TelegramAuthError
+
+
+def _make_qr_client(api_id: int, api_hash: str, session: str) -> Any:
+    """Enable updates from construction for the QR approval event only."""
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    client = TelegramClient(
+        StringSession(session), api_id, api_hash,
+        receive_updates=True, catch_up=False, auto_reconnect=False,
+        connection_retries=1, request_retries=2, timeout=15,
+    )
+    client.session.save_entities = False
+    return client
 
 
 async def login_with_qr(
@@ -21,7 +35,7 @@ async def login_with_qr(
     api_hash: str,
     display_qr: Callable[[str], None],
     prompt_password: Callable[[], Awaitable[str]],
-    client_factory: Callable[[int, str, str], Any] = _make_client,
+    client_factory: Callable[[int, str, str], Any] = _make_qr_client,
     on_progress: Callable[[str], None] | None = None,
     max_qr_attempts: int = 3,
 ) -> None:
@@ -48,7 +62,7 @@ async def login_with_qr(
         await asyncio.wait_for(client.connect(), timeout=45)
         # QRLogin.wait listens for Telegram's UpdateLoginToken.
         # Do not request missed message history or attach chat event handlers.
-        await asyncio.wait_for(client.set_receive_updates(True), timeout=30)
+        # Updates are enabled at construction so QR acceptance is received.
         qr = await asyncio.wait_for(client.qr_login(), timeout=30)
         for attempt in range(max_qr_attempts):
             display_qr(qr.url)
