@@ -46,15 +46,15 @@ class LoginWizard:
         print("  Account format accepted.")
         return int(api_id), api_hash, phone
 
-    def code(self) -> str:
-        return self.session.prompt(
+    async def code(self) -> str:
+        return (await self.session.prompt_async(
             "  One-time login code (shown as *): ", is_password=True,
             validator=validator(r"[0-9]{4,8}", "Expected 4-8 digits"),
             validate_while_typing=False,
-        ).strip()
+        )).strip()
 
-    def password(self) -> str:
-        return self.session.prompt(
+    async def password(self) -> str:
+        return await self.session.prompt_async(
             "  Two-step password (shown as *): ", is_password=True,
             validator=Validator.from_callable(bool, error_message="Cannot be empty"),
             validate_while_typing=False,
