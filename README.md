@@ -4,9 +4,9 @@
 
 > **Experimental:** Telegram group selection and history reading are tested
 > on a real account. Local Ollama digest code is available for user testing,
-> but real-device model inference and a scheduled workflow remain unverified.
+> but the new model and dynamic-day window remain unverified on a real chat.
 
-ChatPulse aims to produce scheduled summaries of busy Telegram conversations,
+ChatPulse aims to produce on-demand summaries of busy Telegram conversations,
 without sending private chat content to cloud AI services.
 
 ## Security model
@@ -82,10 +82,10 @@ ChatPulse never prints or saves that content.
 
 The group ID/access hash is stored in the same **OS Keychain** as the
 account's session; its name is not retained. `preview` uses the approved
-InputPeer only, reads text messages for **07:00–18:00 Asia/Yekaterinburg**,
+InputPeer only, reads text messages within the selected local-day window,
 and prints counts, anonymous participant count and first/last times —
-**never message contents**. The default is the most recent *completed* daily
-window; `--date` can inspect another past date. A message limit is enforced
+**never message contents**. By default it reads today from 00:00 until now;
+`--date` reads a selected past day (00:00–24:00). A message limit is enforced
 to prevent silent truncation. `chatpulse logout` clears the saved group.
 
 This is a privacy-preserving integration smoke test, **not** a Telegram message
@@ -102,7 +102,7 @@ restarted; merely connecting to `localhost` is *not* enough.
 # After configuring ~/.ollama/server.json and pulling a local model yourself:
 chatpulse local-models
 chatpulse digest --model huihui_ai/qwen3-abliterated:8b
-chatpulse digest --model huihui_ai/qwen3-abliterated:8b --date 2026-10-08 \\
+chatpulse digest --model huihui_ai/qwen3-abliterated:8b --date 2026-10-08 \
   --from-time 07:00 --to-time 19:30
 # Optional: --tone neutral
 ```
@@ -117,13 +117,14 @@ See [Ollama setup and security limitations](docs/OLLAMA.md).
 
 ## Defaults for the future digest
 
-- Timezone: `Asia/Yekaterinburg` (configurable later).
-- Window: `07:00–18:00` local time (configurable later).
+- Timezone: `Asia/Yekaterinburg`.
+- Window: 00:00 to invocation for today; 00:00 to 24:00 for past days.
+- Optional `--from-time HH:MM` and `--to-time HH:MM` for a custom window.
 - Input: user-approved Telegram chat history.
 - Output: a local LLM-generated digest.
 
-The opt-in `digest` command is experimental. There is no scheduling or
-Telegram delivery command yet.
+The opt-in `digest` command is experimental and runs only when invoked.
+There is no automatic scheduling or Telegram delivery command yet.
 
 ## Roadmap
 
