@@ -13,6 +13,7 @@ authors = [{name = "ChatPulse contributors"}]
 dependencies = [
     "telethon>=1.45,<2",
     "keyring>=25.6,<26",
+    "prompt_toolkit>=3.0.53,<4",
     "tzdata>=2025.1; sys_platform == 'win32'",
 ]
 
