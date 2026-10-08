@@ -127,6 +127,49 @@ def _preview_history(day: date | None) -> None:
         print("Today is not finished; these counts may be incomplete.")
     print("No message contents, user IDs or group names were printed or saved.")
 
+
+def _local_models() -> None:
+    from chatpulse.ollama_local import OllamaLocal
+
+    models = OllamaLocal().local_models()
+    if not models:
+        print("No eligible downloaded local Ollama models found.")
+        return
+    print("Downloaded local models (cloud-tagged models are excluded):")
+    for item in models:
+        print(f"  {item.name} ({item.disk_bytes // (1024**2)} MiB on disk)")
+
+
+def _digest_history(*, day: date | None, model: str, tone: str) -> None:
+    from chatpulse.credentials import open_system_vault
+    from chatpulse.digest import summarize_safe_messages
+    from chatpulse.group_workflow import read_selected_safe_history
+    from chatpulse.ollama_local import OllamaLocal
+
+    # Privacy gate before the first chat-history request. No Telegram content
+    # is retrieved unless local model/configuration checks are successful.
+    local = OllamaLocal()
+    local.ensure_local(model)
+    print("Local-only model preflight passed. Reading the approved group...", flush=True)
+    actual_day, finished, messages = asyncio.run(
+        read_selected_safe_history(open_system_vault(), day=day)
+    )
+    if not finished:
+        raise ValueError("Digest window is still open; choose a completed day")
+    if not messages:
+        print("No text messages found in the selected time window.")
+        return
+    print(f"Summarizing {len(messages)} redacted messages in memory...", flush=True)
+    digest = summarize_safe_messages(
+        messages, model_client=local, model=model, tone=tone,
+        on_progress=lambda index, count: print(
+            f"  Local summary chunk {index}/{count}", flush=True
+        ),
+    )
+    print(f"\nChatPulse digest — {actual_day.isoformat()} (07:00–18:00)")
+    print("(Local summary. No Telegram messages sent or files written.)\n")
+    print(digest.text)
+
 def _logout() -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.telegram_auth import revoke
@@ -158,6 +201,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     preview_parser = sub.add_parser("preview", help="Count safe messages from approved group")
     preview_parser.add_argument("--date", type=date.fromisoformat, default=None,
                                 help="Local YYYY-MM-DD (default: latest finished day)")
+    sub.add_parser("local-models", help="List eligible local Ollama models; no Telegram reads")
+    digest_parser = sub.add_parser("digest", help="Generate a local-only group digest")
+    digest_parser.add_argument("--model", required=True, help="Downloaded Ollama model")
+    digest_parser.add_argument("--date", type=date.fromisoformat, default=None,
+                               help="Local YYYY-MM-DD (latest finished day by default)")
+    digest_parser.add_argument("--tone", choices=("friends", "neutral"), default="friends")
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
     try:
@@ -182,6 +231,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             _select_chat()
         elif args.command == "preview":
             _preview_history(args.date)
+        elif args.command == "local-models":
+            _local_models()
+        elif args.command == "digest":
+            _digest_history(day=args.date, model=args.model, tone=args.tone)
         elif args.command == "logout":
             _logout()
     except (KeyboardInterrupt, EOFError):
