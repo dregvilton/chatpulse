@@ -6,6 +6,7 @@ import asyncio
 from datetime import date, datetime, timezone
 import json
 import sys
+import time
 from typing import Sequence
 
 from chatpulse.privacy import RawMessage, sanitize_messages, validate_ollama_url
@@ -162,12 +163,16 @@ def _digest_history(*, day: date | None, model: str, tone: str) -> None:
         print("No text messages found in the selected time window.")
         return
     print(f"Summarizing {len(messages)} redacted messages in memory...", flush=True)
+    started = time.monotonic()
     digest = summarize_safe_messages(
         messages, model_client=local, model=model, tone=tone,
         on_progress=lambda index, count: print(
-            f"  Local summary chunk {index}/{count}", flush=True
+            f"  Local summary chunk {index}/{count} "
+            f"(elapsed {int(time.monotonic() - started)} s)", flush=True
         ),
     )
+    print(f"  Total generation: {int(time.monotonic() - started)} s, "
+          f"{digest.chunks} chunks", flush=True)
     print(f"\nChatPulse digest — {actual_day.isoformat()} (07:00–18:00)")
     print("(Local summary. No Telegram messages sent or files written.)\n")
     print(digest.text)
