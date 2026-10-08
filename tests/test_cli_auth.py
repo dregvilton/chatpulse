@@ -34,6 +34,26 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("password", shown)
         self.assertNotIn("telegram secret", shown)
 
+    def test_preview_accepts_local_start_end_flags(self):
+        from datetime import date
+        from chatpulse.group_workflow import PreviewStats
+
+        result = PreviewStats(
+            day=date(2026, 10, 8), messages=4, participants=2,
+            first_time="18:00", last_time="19:00", window_finished=False,
+            window_start="17:00", window_end="19:30",
+        )
+        with patch("chatpulse.credentials.open_system_vault", return_value=object()):
+            with patch("chatpulse.group_workflow.preview_selected_group",
+                       return_value=result) as fn:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(
+                        main(["preview", "--date", "2026-10-08",
+                              "--from-time", "17:00", "--to-time", "19:30"]), 0
+                    )
+        self.assertEqual(fn.call_args.kwargs["from_time"].hour, 17)
+        self.assertEqual(fn.call_args.kwargs["to_time"].minute, 30)
+
     def test_select_chat_refuses_non_tty_before_discovery(self):
         errors = StringIO()
         with patch("chatpulse.cli._interactive_only",
@@ -59,7 +79,15 @@ class CliTests(unittest.TestCase):
         from chatpulse.privacy import SafeMessage
 
         async def fake_history(*args, **kwargs):
-            return date(2026, 10, 8), True, [
+            from chatpulse.history import DigestWindow
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            local = ZoneInfo("Asia/Yekaterinburg")
+            window = DigestWindow(
+                datetime(2026, 10, 8, 7, tzinfo=local),
+                datetime(2026, 10, 8, 19, tzinfo=local),
+            )
+            return window, False, [
                 SafeMessage("Participant 1", "10:00", "PRIVATE CHAT DATA"),
             ]
 
@@ -77,6 +105,8 @@ class CliTests(unittest.TestCase):
                                       "--date", "2026-10-08"]), 0
                             )
         self.assertIn("Synthetic summary", output.getvalue())
+        self.assertIn("(07:00–19:00", output.getvalue())
+        self.assertIn("Snapshot", output.getvalue())
         self.assertNotIn("PRIVATE CHAT DATA", output.getvalue())
 
     def test_remote_doctor_rejected_without_printing_endpoint(self):
