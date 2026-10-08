@@ -4,6 +4,7 @@ No chat text or participant names are persisted or printed by these workflows.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -60,10 +61,10 @@ async def approve_group(
         raise TelegramAuthError("Authorize Telegram before choosing a group")
     client = client_factory(creds.api_id, creds.api_hash, creds.session)
     try:
-        await client.connect()
+        await asyncio.wait_for(client.connect(), timeout=45)
         if not await client.is_user_authorized():
             raise TelegramAuthError("Telegram session is no longer authorized")
-        groups = await discover_groups(client)
+        groups = await asyncio.wait_for(discover_groups(client), timeout=90)
         if not groups:
             return False
         present_choices(groups)
@@ -102,10 +103,13 @@ async def preview_selected_group(
         await client.connect()
         if not await client.is_user_authorized():
             raise TelegramAuthError("Telegram session is no longer authorized")
-        safe = await collect_safe_history(
-            SelectedChatHistoryClient(client, selected),
-            chat_id=selected.peer_id, allowed_chat_ids=frozenset({selected.peer_id}),
-            window=window, max_messages=max_messages,
+        safe = await asyncio.wait_for(
+            collect_safe_history(
+                SelectedChatHistoryClient(client, selected),
+                chat_id=selected.peer_id, allowed_chat_ids=frozenset({selected.peer_id}),
+                window=window, max_messages=max_messages,
+            ),
+            timeout=180,
         )
         return PreviewStats(
             day=target_day, messages=len(safe),
