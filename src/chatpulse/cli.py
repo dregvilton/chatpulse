@@ -102,6 +102,7 @@ def _select_chat() -> None:
         )
         return int(number)
 
+    print("Connecting to Telegram and loading group choices...", flush=True)
     if asyncio.run(approve_group(
         vault, consent=True, present_choices=show, choose_number=choose,
     )):
@@ -114,6 +115,7 @@ def _preview_history(day: date | None) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.group_workflow import preview_selected_group
 
+    print("Reading the approved group history (no messages will be printed)...", flush=True)
     stats = asyncio.run(preview_selected_group(open_system_vault(), day=day))
     print(f"Group history preview: {stats.day.isoformat()} (Asia/Yekaterinburg)")
     print("Time window: 07:00-18:00, local timezone")
@@ -186,11 +188,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("\nCancelled.", file=sys.stderr)
         return 130
     except TimeoutError:
-        print(
-            "Telegram did not respond in time. Check your connection. "
-            "A code may still arrive; avoid repeatedly requesting new ones.",
-            file=sys.stderr,
-        )
+        if args.command == "login":
+            message = (
+                "Telegram did not respond in time. A login code may still "
+                "arrive; avoid repeatedly requesting new ones."
+            )
+        else:
+            message = "Telegram request timed out. No messages were saved."
+        print(message, file=sys.stderr)
         return 1
     except Exception:
         # Telethon and OS keyring errors can contain phone numbers, codes or
