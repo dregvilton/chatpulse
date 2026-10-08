@@ -21,17 +21,18 @@ This feature is **opt-in**. `chatpulse preview` never invokes an LLM.
    Ollama docs: https://docs.ollama.com/faq#how-do-i-disable-ollama-cloud-features
 
 3. Deliberately download a **local model** suitable for your memory. For
-   example, `ollama pull qwen3:4b-instruct` (the actual model may be changed).
+   example, `ollama pull huihui_ai/qwen3-abliterated:8b` (the actual model may be changed).
    This download contacts Ollama's model registry; only subsequent
    inference is local. ChatPulse never downloads models automatically.
 4. Run `chatpulse local-models`. It requires the cloud-disabled config and
    lists eligible downloaded models. Remote aliases and names containing
    `cloud` are excluded.
-5. Run `chatpulse digest --date 2026-10-08 --model qwen3:4b-instruct`.
+5. Run `chatpulse digest --date 2026-10-08 --model huihui_ai/qwen3-abliterated:8b`.
    Use `--tone friends` (default) or `--tone neutral`.
 
 The entire command reads **only the previously approved chat**, in
-`07:00–18:00 Asia/Yekaterinburg`, pseudonymizes/redacts messages in
+the selected day's local window (by default 00:00 until invocation
+for today), pseudonymizes/redacts messages in
 memory, then sends *only those projections* to the local HTTP Ollama server.
 The digest is printed to the **local terminal**, never sent to Telegram or
 saved to a file. Terminal scrollback and a compromised local OS/user are
@@ -72,7 +73,7 @@ Model processing can take substantial time on less powerful machines.
 ## About model choice
 
 Larger 12B models may be slow or too large for lower-memory Apple Silicon
-Macs. A small locally downloaded 4B model is a reasonable first smoke test,
+Macs. A locally downloaded 8B abliterated model is a reasonable first alternative,
 but quality should be evaluated on your actual chat. Model choice does not
 change the privacy guarantees of an appropriately isolated local Ollama
 daemon. Don't use the `:cloud` variants.
