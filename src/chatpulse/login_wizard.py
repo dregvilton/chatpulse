@@ -22,7 +22,7 @@ class LoginWizard:
         # DummyHistory disables up-arrow recovery, including secret inputs.
         self.session: PromptSession[str] = PromptSession(history=DummyHistory())
 
-    def application(self) -> tuple[int, str, str]:
+    def application(self, *, qr: bool = False) -> tuple[int, str, str | None]:
         print("\nChatPulse - Telegram authorization")
         print("Step 1 of 3: application credentials")
         print("Open https://my.telegram.org/apps for your own API credentials.")
@@ -36,6 +36,8 @@ class LoginWizard:
             validate_while_typing=False,
         ).strip()
         print("  Application credential format accepted.")
+        if qr:
+            return int(api_id), api_hash, None
         print("\nStep 2 of 3: account")
         print("Your input will appear as * characters. Press Enter once.")
         phone = self.session.prompt(
