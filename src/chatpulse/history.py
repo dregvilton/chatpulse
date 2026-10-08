@@ -44,7 +44,13 @@ async def collect_history(client: HistoryClient, *, chat_id: int,
     if not 1 <= max_messages <= 10000:
         raise ValueError("Invalid max_messages")
     output: list[RawMessage] = []
+    # Also cap non-text/service/media entries, not just collected text.
+    scanned = 0
+    scan_limit = min(20000, max_messages * 3)
     async for item in client.iter_messages(chat_id, offset_date=window.end.astimezone(timezone.utc)):
+        scanned += 1
+        if scanned > scan_limit:
+            raise ValueError("Scan limit exceeded; refusing partial digest")
         when = getattr(item, "date", None)
         if not isinstance(when, datetime) or when.tzinfo is None:
             raise ValueError("Invalid Telegram timestamp")
