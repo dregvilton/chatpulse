@@ -77,15 +77,15 @@ async def approve_group(
         await client.disconnect()
 
 
-async def preview_selected_group(
+async def read_selected_safe_history(
     vault: CredentialVault,
     *,
     day: date | None = None,
     max_messages: int = 5000,
     client_factory: Callable[[int, str, str], Any] = _make_client,
     now: datetime | None = None,
-) -> PreviewStats:
-    """Count redacted messages for one group without emitting raw text."""
+):
+    """Only the approved group, only safe projections; no content printed."""
     selected = vault.load_selected_chat()
     if selected is None:
         raise TelegramAuthError("Select a group first")
@@ -100,7 +100,7 @@ async def preview_selected_group(
     window = daily_window(target_day)
     client = client_factory(creds.api_id, creds.api_hash, creds.session)
     try:
-        await client.connect()
+        await asyncio.wait_for(client.connect(), timeout=45)
         if not await client.is_user_authorized():
             raise TelegramAuthError("Telegram session is no longer authorized")
         safe = await asyncio.wait_for(
@@ -111,12 +111,28 @@ async def preview_selected_group(
             ),
             timeout=180,
         )
-        return PreviewStats(
-            day=target_day, messages=len(safe),
-            participants=len({message.author for message in safe}),
-            first_time=safe[0].time if safe else None,
-            last_time=safe[-1].time if safe else None,
-            window_finished=local_now >= window.end,
-        )
+        return target_day, local_now >= window.end, safe
     finally:
         await client.disconnect()
+
+
+async def preview_selected_group(
+    vault: CredentialVault,
+    *,
+    day: date | None = None,
+    max_messages: int = 5000,
+    client_factory: Callable[[int, str, str], Any] = _make_client,
+    now: datetime | None = None,
+) -> PreviewStats:
+    """Count redacted messages for one group without emitting raw text."""
+    target_day, finished, safe = await read_selected_safe_history(
+        vault, day=day, max_messages=max_messages,
+        client_factory=client_factory, now=now,
+    )
+    return PreviewStats(
+        day=target_day, messages=len(safe),
+        participants=len({message.author for message in safe}),
+        first_time=safe[0].time if safe else None,
+        last_time=safe[-1].time if safe else None,
+        window_finished=finished,
+    )
