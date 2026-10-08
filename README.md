@@ -48,7 +48,8 @@ entirely synthetic and offline.
 ## Telegram login
 
 ```sh
-chatpulse login     # Interactive login, stores authorization in OS keyring
+chatpulse login --qr  # Preferred: scan QR with Telegram mobile Settings > Devices
+chatpulse login       # Alternative: one-time code (Telegram controls delivery)
 chatpulse status    # Checks whether a local secret exists; no network calls
 chatpulse logout    # Revokes this session via Telegram, then clears keyring
 ```
