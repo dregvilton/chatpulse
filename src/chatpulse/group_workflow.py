@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from chatpulse.credentials import CredentialVault
 from chatpulse.history import (
-    DEFAULT_TIMEZONE, collect_safe_history, daily_window,
+    DEFAULT_TIMEZONE, DigestWindow, collect_safe_history,
 )
 from chatpulse.selection import (
     GroupChoice, SelectedChatHistoryClient, discover_groups,
@@ -29,17 +29,39 @@ class PreviewStats:
     first_time: str | None
     last_time: str | None
     window_finished: bool
+    window_start: str = "00:00"
+    window_end: str = "00:00"
 
 
-def most_recent_completed_day(now: datetime | None = None) -> date:
+def resolve_window(
+    *, day: date | None, now: datetime,
+    from_time: time | None = None, to_time: time | None = None,
+) -> DigestWindow:
+    """Today is a snapshot until invocation; past days cover full calendar day.
+
+    User-defined HH:MM boundaries are optional, not a fixed schedule.
+    """
+    if now.tzinfo is None:
+        raise ValueError("Current time must include timezone")
     zone = ZoneInfo(DEFAULT_TIMEZONE)
-    local = now.astimezone(zone) if now is not None else datetime.now(zone)
-    if local.tzinfo is None:
-        raise ValueError("Timezone-aware time is required")
-    return local.date() if local.time().replace(tzinfo=None) >= time(18) else (
-        local.date() - timedelta(days=1)
-    )
-
+    local_now = now.astimezone(zone)
+    target = local_now.date() if day is None else day
+    if type(target) is not date or target > local_now.date():
+        raise ValueError("Cannot read a future date")
+    if from_time is not None and from_time.tzinfo is not None:
+        raise ValueError("Use local HH:MM start time without timezone offset")
+    if to_time is not None and to_time.tzinfo is not None:
+        raise ValueError("Use local HH:MM end time without timezone offset")
+    start = datetime.combine(target, from_time or time.min, tzinfo=zone)
+    if to_time is not None:
+        end = datetime.combine(target, to_time, tzinfo=zone)
+    elif target == local_now.date():
+        end = local_now
+    else:
+        end = datetime.combine(target + timedelta(days=1), time.min, tzinfo=zone)
+    if end > local_now:
+        raise ValueError("Selected time window ends in the future")
+    return DigestWindow(start, end)
 
 async def approve_group(
     vault: CredentialVault,
@@ -81,6 +103,8 @@ async def read_selected_safe_history(
     vault: CredentialVault,
     *,
     day: date | None = None,
+    from_time: time | None = None,
+    to_time: time | None = None,
     max_messages: int = 5000,
     client_factory: Callable[[int, str, str], Any] = _make_client,
     now: datetime | None = None,
@@ -94,10 +118,9 @@ async def read_selected_safe_history(
         raise TelegramAuthError("Telegram account is not authorized")
     zone = ZoneInfo(DEFAULT_TIMEZONE)
     local_now = now.astimezone(zone) if now is not None else datetime.now(zone)
-    target_day = day if day is not None else most_recent_completed_day(local_now)
-    if type(target_day) is not date or target_day > local_now.date():
-        raise ValueError("Date must be today or earlier")
-    window = daily_window(target_day)
+    window = resolve_window(
+        day=day, now=local_now, from_time=from_time, to_time=to_time
+    )
     client = client_factory(creds.api_id, creds.api_hash, creds.session)
     try:
         await asyncio.wait_for(client.connect(), timeout=45)
@@ -111,7 +134,7 @@ async def read_selected_safe_history(
             ),
             timeout=180,
         )
-        return target_day, local_now >= window.end, safe
+        return window, window.start.date() < local_now.date(), safe
     finally:
         await client.disconnect()
 
@@ -120,19 +143,24 @@ async def preview_selected_group(
     vault: CredentialVault,
     *,
     day: date | None = None,
+    from_time: time | None = None,
+    to_time: time | None = None,
     max_messages: int = 5000,
     client_factory: Callable[[int, str, str], Any] = _make_client,
     now: datetime | None = None,
 ) -> PreviewStats:
     """Count redacted messages for one group without emitting raw text."""
-    target_day, finished, safe = await read_selected_safe_history(
-        vault, day=day, max_messages=max_messages,
+    window, finished, safe = await read_selected_safe_history(
+        vault, day=day, from_time=from_time, to_time=to_time,
+        max_messages=max_messages,
         client_factory=client_factory, now=now,
     )
     return PreviewStats(
-        day=target_day, messages=len(safe),
+        day=window.start.date(), messages=len(safe),
         participants=len({message.author for message in safe}),
         first_time=safe[0].time if safe else None,
         last_time=safe[-1].time if safe else None,
         window_finished=finished,
+        window_start=window.start.strftime("%H:%M"),
+        window_end=window.end.strftime("%H:%M") if window.end.date() == window.start.date() else "24:00",
     )
