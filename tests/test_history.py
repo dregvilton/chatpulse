@@ -47,6 +47,15 @@ class HistoryTests(unittest.TestCase):
                 chat_id=11, allowed_chat_ids=frozenset({11}),
                 window=daily_window(date(2026, 10, 8)), max_messages=1))
 
+    def test_media_only_scan_is_bounded(self):
+        media_only = [msg(5, None)] * 4
+        with self.assertRaisesRegex(ValueError, "Scan limit exceeded"):
+            asyncio.run(collect_history(
+                FakeClient(media_only), chat_id=11,
+                allowed_chat_ids=frozenset({11}),
+                window=daily_window(date(2026, 10, 8)), max_messages=1,
+            ))
+
     def test_media_skipped(self):
         output = asyncio.run(collect_history(FakeClient([msg(5, None), msg(4, "text")]),
              chat_id=11, allowed_chat_ids=frozenset({11}),
