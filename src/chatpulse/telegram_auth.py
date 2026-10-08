@@ -5,6 +5,7 @@ This module does not read dialogs/messages, and does not contact any LLM.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -51,10 +52,10 @@ async def login(
     # No .session SQLite file: all mutable Telethon session state lives in memory.
     client = client_factory(api_id, api_hash, "")
     try:
-        await client.connect()
+        await asyncio.wait_for(client.connect(), timeout=45)
         if on_progress is not None:
             on_progress("connected")
-        sent = await client.send_code_request(phone)
+        sent = await asyncio.wait_for(client.send_code_request(phone), timeout=45)
         if on_progress is not None:
             on_progress("code_sent")
         code = await prompt_code()
