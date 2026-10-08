@@ -9,6 +9,8 @@ import sys
 from typing import Sequence
 
 from chatpulse.privacy import RawMessage, sanitize_messages, validate_ollama_url
+from chatpulse.ollama_local import LocalModelError
+from chatpulse.digest import DigestError
 
 
 def _interactive_only() -> None:
@@ -240,6 +242,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.", file=sys.stderr)
         return 130
+    except LocalModelError:
+        print(
+            "Local Ollama verification failed. Check that cloud features "
+            "are disabled in ~/.ollama/server.json, restart Ollama, "
+            "and run chatpulse local-models. No chat content was sent "
+            "unless generation had already started.",
+            file=sys.stderr,
+        )
+        return 1
+    except DigestError:
+        print(
+            "Digest could not be completed within safety and size limits. "
+            "No summary was saved or sent to Telegram.",
+            file=sys.stderr,
+        )
+        return 1
     except TimeoutError:
         if args.command == "login":
             message = (
