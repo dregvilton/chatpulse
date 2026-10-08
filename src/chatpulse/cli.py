@@ -16,7 +16,7 @@ def _interactive_only() -> None:
         raise RuntimeError("Login/logout requires an interactive terminal")
 
 
-def _login() -> None:
+def _login(*, qr: bool = False) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.telegram_auth import login
 
@@ -27,7 +27,25 @@ def _login() -> None:
     from chatpulse.login_wizard import LoginWizard
 
     wizard = LoginWizard()
-    api_id, api_hash, phone = wizard.application()
+    api_id, api_hash, phone = wizard.application(qr=qr)
+    if qr:
+        from chatpulse.qr_auth import login_with_qr
+        from chatpulse.qr_display import show_qr
+        print("\nStep 2 of 2: QR verification", flush=True)
+        asyncio.run(login_with_qr(
+            vault, api_id=api_id, api_hash=api_hash,
+            display_qr=show_qr, prompt_password=wizard.password,
+            on_progress=lambda stage: print({
+                "connecting": "  Connecting to Telegram...",
+                "qr_ready": "  Waiting for approval on your phone...",
+                "qr_expired": "  QR expired. Generating a fresh code...",
+                "password_required": "  Telegram requires your two-step password.",
+                "storing": "  Authorized! Saving securely in OS keyring...",
+            }[stage], flush=True),
+        ))
+        print("\nSuccess: Telegram session stored in OS keyring.")
+        return
+    assert phone is not None
     print("\nStep 3 of 3: Telegram verification")
     print("  Connecting and requesting a code... (network connection may take time)", flush=True)
     asyncio.run(login(
@@ -67,7 +85,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("demo", help="Show anonymization using synthetic input")
     doctor = sub.add_parser("doctor", help="Validate local-only endpoint; no network calls")
     doctor.add_argument("--ollama-url", default="http://127.0.0.1:11434")
-    sub.add_parser("login", help="Authorize a Telegram user, store session in OS keyring")
+    login_parser = sub.add_parser(
+        "login", help="Authorize through a code or --qr using OS keyring"
+    )
+    login_parser.add_argument("--qr", action="store_true", help="Scan with Telegram phone app")
     sub.add_parser("status", help="Show only whether a local session exists")
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
@@ -88,7 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             from chatpulse.credentials import open_system_vault
             print("Session stored." if open_system_vault().load() else "Not logged in.")
         elif args.command == "login":
-            _login()
+            _login(qr=args.qr)
         elif args.command == "logout":
             _logout()
     except (KeyboardInterrupt, EOFError):
