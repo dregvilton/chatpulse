@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import json
 import sys
 from typing import Sequence
@@ -63,6 +63,70 @@ def _login(*, qr: bool = False) -> None:
     print("Telegram session stored in your OS credential vault.")
 
 
+
+def _select_chat() -> None:
+    from chatpulse.credentials import open_system_vault
+    from chatpulse.group_workflow import approve_group
+    from chatpulse.selection import GroupChoice
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import DummyHistory
+    from prompt_toolkit.validation import Validator
+
+    _interactive_only()
+    vault = open_system_vault()
+    if vault.load() is None:
+        print("Not logged in. Run chatpulse login --qr first.")
+        return
+    print("This action temporarily fetches up to 200 recent Telegram dialog records.")
+    print("Only group titles will appear locally. Private chats and messages are not shown.")
+    print("Telegram may transmit recent-message metadata during dialog discovery.")
+    if input("Type LIST to inspect eligible groups: ").strip() != "LIST":
+        print("Cancelled: no dialog discovery.")
+        return
+
+    def show(groups: list[GroupChoice]) -> None:
+        print("\nGroups available (at most 50):")
+        for index, group in enumerate(groups, 1):
+            print(f"  {index:2}. {group.title}")
+
+    async def choose(limit: int) -> int:
+        session: PromptSession[str] = PromptSession(history=DummyHistory())
+        number = await session.prompt_async(
+            "\nSelect group number: ",
+            validator=Validator.from_callable(
+                lambda value: value.isascii() and value.isdecimal()
+                and 1 <= int(value) <= limit,
+                error_message="Enter one of the listed group numbers",
+            ),
+            validate_while_typing=False,
+        )
+        return int(number)
+
+    print("Connecting to Telegram and loading group choices...", flush=True)
+    if asyncio.run(approve_group(
+        vault, consent=True, present_choices=show, choose_number=choose,
+    )):
+        print("Approved group saved in OS keyring. Other chats remain unselected.")
+    else:
+        print("No eligible groups found in the first 200 dialogs.")
+
+
+def _preview_history(day: date | None) -> None:
+    from chatpulse.credentials import open_system_vault
+    from chatpulse.group_workflow import preview_selected_group
+
+    print("Reading the approved group history (no messages will be printed)...", flush=True)
+    stats = asyncio.run(preview_selected_group(open_system_vault(), day=day))
+    print(f"Group history preview: {stats.day.isoformat()} (Asia/Yekaterinburg)")
+    print("Time window: 07:00-18:00, local timezone")
+    print(f"Text messages: {stats.messages}")
+    print(f"Participants (pseudonymized): {stats.participants}")
+    if stats.first_time is not None:
+        print(f"First / last message: {stats.first_time} / {stats.last_time}")
+    if not stats.window_finished:
+        print("Today is not finished; these counts may be incomplete.")
+    print("No message contents, user IDs or group names were printed or saved.")
+
 def _logout() -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.telegram_auth import revoke
@@ -90,6 +154,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     login_parser.add_argument("--qr", action="store_true", help="Scan with Telegram phone app")
     sub.add_parser("status", help="Show only whether a local session exists")
+    sub.add_parser("select-chat", help="Opt in to listing groups and approve one group")
+    preview_parser = sub.add_parser("preview", help="Count safe messages from approved group")
+    preview_parser.add_argument("--date", type=date.fromisoformat, default=None,
+                                help="Local YYYY-MM-DD (default: latest finished day)")
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
     try:
@@ -110,17 +178,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Session stored." if open_system_vault().load() else "Not logged in.")
         elif args.command == "login":
             _login(qr=args.qr)
+        elif args.command == "select-chat":
+            _select_chat()
+        elif args.command == "preview":
+            _preview_history(args.date)
         elif args.command == "logout":
             _logout()
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.", file=sys.stderr)
         return 130
     except TimeoutError:
-        print(
-            "Telegram did not respond in time. Check your connection. "
-            "A code may still arrive; avoid repeatedly requesting new ones.",
-            file=sys.stderr,
-        )
+        if args.command == "login":
+            message = (
+                "Telegram did not respond in time. A login code may still "
+                "arrive; avoid repeatedly requesting new ones."
+            )
+        else:
+            message = "Telegram request timed out. No messages were saved."
+        print(message, file=sys.stderr)
         return 1
     except Exception:
         # Telethon and OS keyring errors can contain phone numbers, codes or

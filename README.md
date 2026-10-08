@@ -60,6 +60,36 @@ or your repository.** Use only the private interactive prompts.
 
 See [Telegram setup and known limitations](docs/TELEGRAM.md).
 
+## Choose one chat and preview its history
+
+Once Telegram authorization is stored, you can approve **one** group at a
+time. No automatic discovery occurs on login.
+
+```sh
+chatpulse select-chat
+# Enter LIST to explicitly allow a limited, temporary group listing
+# Then select a group by its number
+chatpulse preview
+chatpulse preview --date 2026-10-08
+```
+
+Only group titles and selection numbers appear while choosing a group. The
+list contains at most 50 group titles from the first 200 recent dialogs;
+private one-to-one chats and broadcast channels are not offered. Telegram
+may include latest-message metadata internally in its dialog response, but
+ChatPulse never prints or saves that content.
+
+The group ID/access hash is stored in the same **OS Keychain** as the
+account's session; its name is not retained. `preview` uses the approved
+InputPeer only, reads text messages for **07:00–18:00 Asia/Yekaterinburg**,
+and prints counts, anonymous participant count and first/last times —
+**never message contents**. The default is the most recent *completed* daily
+window; `--date` can inspect another past date. A message limit is enforced
+to prevent silent truncation. `chatpulse logout` clears the saved group.
+
+This is a privacy-preserving integration smoke test, **not** a digest generator
+or a Telegram message sender. No local LLM is called yet.
+
 ## Defaults for the future digest
 
 - Timezone: `Asia/Yekaterinburg` (configurable later).
