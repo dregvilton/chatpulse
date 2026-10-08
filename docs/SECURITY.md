@@ -56,6 +56,27 @@
 - Live real-account testing is required before claiming the entire path
   works against Telegram. CI uses fake clients without network access.
 
+## Experimental on-device inference
+
+- `chatpulse digest` will **not read Telegram history** until it has
+  verified the local Ollama cloud-disable config and the selected model.
+- Its HTTP client connects directly to a numeric loopback address with
+  no proxy following, redirect handling or DNS lookup.
+- The selected model must be downloaded and appear in the local model list;
+  names marked `cloud` or entries with `remote_host` or `remote_model`
+  are excluded. We check those properties before each inference request.
+- Cloud disabling must be configured on the **actual Ollama server**;
+  ChatPulse can check the local `~/.ollama/server.json`, but cannot attest
+  that a compromised daemon obeys it or has restarted.
+- Content sent to the local model is best-effort redacted, not guaranteed
+  anonymous. Any summary printed to a local terminal remains visible in
+  terminal scrollback and potentially to local malware.
+- Prompts explicitly treat chat contents as data, not instructions;
+  prompt-injection attacks can still influence LLM output.
+- No automatic downloads, system prompts containing user secrets, remote
+  requests, exports, or Telegram delivery.
+- See [Ollama setup and trust boundaries](OLLAMA.md).
+
 ## Pending before first real digest
 
 - Explicit approved chat/entity resolution with no dialog enumeration;
