@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as clock_time, timezone
 import json
 import sys
 import time
@@ -114,20 +114,23 @@ def _select_chat() -> None:
         print("No eligible groups found in the first 200 dialogs.")
 
 
-def _preview_history(day: date | None) -> None:
+def _preview_history(day: date | None, from_time: clock_time | None = None,
+                     to_time: clock_time | None = None) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.group_workflow import preview_selected_group
 
     print("Reading the approved group history (no messages will be printed)...", flush=True)
-    stats = asyncio.run(preview_selected_group(open_system_vault(), day=day))
+    stats = asyncio.run(preview_selected_group(
+        open_system_vault(), day=day, from_time=from_time, to_time=to_time
+    ))
     print(f"Group history preview: {stats.day.isoformat()} (Asia/Yekaterinburg)")
-    print("Time window: 07:00-18:00, local timezone")
+    print(f"Time window: {stats.window_start}-{stats.window_end}, local timezone")
     print(f"Text messages: {stats.messages}")
     print(f"Participants (pseudonymized): {stats.participants}")
     if stats.first_time is not None:
         print(f"First / last message: {stats.first_time} / {stats.last_time}")
     if not stats.window_finished:
-        print("Today is not finished; these counts may be incomplete.")
+        print("Today is still ongoing; this is a snapshot at the requested cutoff.")
     print("No message contents, user IDs or group names were printed or saved.")
 
 
@@ -143,7 +146,9 @@ def _local_models() -> None:
         print(f"  {item.name} ({item.disk_bytes // (1024**2)} MiB on disk)")
 
 
-def _digest_history(*, day: date | None, model: str, tone: str) -> None:
+def _digest_history(*, day: date | None, model: str, tone: str,
+                    from_time: clock_time | None = None,
+                    to_time: clock_time | None = None) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.digest import summarize_safe_messages
     from chatpulse.group_workflow import read_selected_safe_history
@@ -154,11 +159,11 @@ def _digest_history(*, day: date | None, model: str, tone: str) -> None:
     local = OllamaLocal()
     local.ensure_local(model)
     print("Local-only model preflight passed. Reading the approved group...", flush=True)
-    actual_day, finished, messages = asyncio.run(
-        read_selected_safe_history(open_system_vault(), day=day)
+    window, finished, messages = asyncio.run(
+        read_selected_safe_history(
+            open_system_vault(), day=day, from_time=from_time, to_time=to_time
+        )
     )
-    if not finished:
-        raise ValueError("Digest window is still open; choose a completed day")
     if not messages:
         print("No text messages found in the selected time window.")
         return
@@ -173,7 +178,11 @@ def _digest_history(*, day: date | None, model: str, tone: str) -> None:
     )
     print(f"  Total generation: {int(time.monotonic() - started)} s, "
           f"{digest.chunks} chunks", flush=True)
-    print(f"\nChatPulse digest — {actual_day.isoformat()} (07:00–18:00)")
+    cutoff = window.end.strftime("%H:%M") if window.start.date() == window.end.date() else "24:00"
+    print(f"\nChatPulse digest — {window.start.date().isoformat()} "
+          f"({window.start.strftime('%H:%M')}–{cutoff}, Asia/Yekaterinburg)")
+    if not finished:
+        print("(Snapshot: new messages may arrive after this run.)")
     print("(Local summary. No Telegram messages sent or files written.)\n")
     print(digest.text)
 
@@ -207,13 +216,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("select-chat", help="Opt in to listing groups and approve one group")
     preview_parser = sub.add_parser("preview", help="Count safe messages from approved group")
     preview_parser.add_argument("--date", type=date.fromisoformat, default=None,
-                                help="Local YYYY-MM-DD (default: latest finished day)")
+                                help="Local YYYY-MM-DD (default: today, up to now)")
+    preview_parser.add_argument("--from-time", type=clock_time.fromisoformat, default=None,
+                                help="Local HH:MM start (default 00:00)")
+    preview_parser.add_argument("--to-time", type=clock_time.fromisoformat, default=None,
+                                help="Local HH:MM cutoff (default now today, 24:00 past days)")
     sub.add_parser("local-models", help="List eligible local Ollama models; no Telegram reads")
     digest_parser = sub.add_parser("digest", help="Generate a local-only group digest")
     digest_parser.add_argument("--model", required=True, help="Downloaded Ollama model")
     digest_parser.add_argument("--date", type=date.fromisoformat, default=None,
-                               help="Local YYYY-MM-DD (latest finished day by default)")
+                               help="Local YYYY-MM-DD (default: today, up to now)")
     digest_parser.add_argument("--tone", choices=("friends", "neutral"), default="friends")
+    digest_parser.add_argument("--from-time", type=clock_time.fromisoformat, default=None,
+                               help="Local HH:MM start (default 00:00)")
+    digest_parser.add_argument("--to-time", type=clock_time.fromisoformat, default=None,
+                               help="Local HH:MM cutoff (default now today, 24:00 past days)")
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
     try:
@@ -237,11 +254,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "select-chat":
             _select_chat()
         elif args.command == "preview":
-            _preview_history(args.date)
+            _preview_history(args.date, args.from_time, args.to_time)
         elif args.command == "local-models":
             _local_models()
         elif args.command == "digest":
-            _digest_history(day=args.date, model=args.model, tone=args.tone)
+            _digest_history(
+                day=args.date, model=args.model, tone=args.tone,
+                from_time=args.from_time, to_time=args.to_time,
+            )
         elif args.command == "logout":
             _logout()
     except (KeyboardInterrupt, EOFError):
