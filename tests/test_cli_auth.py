@@ -21,6 +21,14 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["doctor", "--ollama-url", "http://192.168.1.2:11434"]), 1)
         self.assertNotIn("192.168.1.2", err.getvalue())
 
+    def test_timeout_is_actionable_and_does_not_echo_secrets(self):
+        err = StringIO()
+        with patch("chatpulse.cli._login", side_effect=TimeoutError("private phone")):
+            with redirect_stderr(err):
+                self.assertEqual(main(["login"]), 1)
+        self.assertIn("Telegram did not respond in time", err.getvalue())
+        self.assertNotIn("private phone", err.getvalue())
+
     def test_errors_do_not_leak_exception_text(self):
         err = StringIO()
         with patch("chatpulse.credentials.open_system_vault",
