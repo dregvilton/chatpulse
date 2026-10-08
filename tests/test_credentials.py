@@ -7,16 +7,7 @@ from chatpulse.credentials import (
 )
 
 
-class FakeKeyring:
-    def __init__(self):
-        self.entries = {}
-    def get_password(self, service, username):
-        return self.entries.get((service, username))
-    def set_password(self, service, username, password):
-        self.entries[(service, username)] = password
-    def delete_password(self, service, username):
-        del self.entries[(service, username)]
-
+from tests.fakes import FakeKeyring
 
 class VaultTests(unittest.TestCase):
     def test_unknown_backend_rejected(self):

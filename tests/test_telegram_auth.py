@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from chatpulse.credentials import CredentialVault
 from chatpulse.telegram_auth import TelegramAuthError, login, revoke
-from test_credentials import FakeKeyring
+from tests.fakes import FakeKeyring
 
 
 class FakeClient:
