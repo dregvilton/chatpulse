@@ -38,6 +38,24 @@
   local secret after confirmation. On network failure retain secret and
   instruct revocation in Telegram > Settings > Devices.
 
+## Group selection and safe preview
+
+- `chatpulse select-chat` requires typing `LIST` *before* dialog discovery.
+  The bounded dialog response can contain last-message metadata returned by
+  Telegram; ChatPulse ignores this content and offers **groups only**.
+- Telegram group titles are displayed locally, with terminal control/bidi
+  characters removed; titles are not saved.
+- The selected group InputPeer ID and per-account access hash are stored in
+  the same native OS keyring. The choice is removed after successful logout
+  or overwritten on reauthorization.
+- `chatpulse preview` makes a narrow, one-chat time-bounded history request,
+  runs the privacy projection in memory, and displays only aggregate counts
+  and times. No messages are sent to any model, logged or exported.
+- A group allowlist is a code-level protection against accidental reads, not
+  a capability-security boundary on the Telegram session itself.
+- Live real-account testing is required before claiming the entire path
+  works against Telegram. CI uses fake clients without network access.
+
 ## Pending before first real digest
 
 - Explicit approved chat/entity resolution with no dialog enumeration;
