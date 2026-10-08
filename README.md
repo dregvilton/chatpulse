@@ -101,7 +101,7 @@ restarted; merely connecting to `localhost` is *not* enough.
 ```sh
 # After configuring ~/.ollama/server.json and pulling a local model yourself:
 chatpulse local-models
-chatpulse digest --model qwen3:4b --date 2026-10-08
+chatpulse digest --model qwen3:4b-instruct --date 2026-10-08
 # Optional: --tone neutral
 ```
 
