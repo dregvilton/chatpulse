@@ -7,12 +7,18 @@ bot token cannot fetch arbitrary chat history on demand.
 
 1. Install package dependencies and have a functioning OS keyring.
 2. Create **your own** Telegram API ID + hash at https://my.telegram.org.
-3. Run `chatpulse login` in a terminal. Paste API ID; enter API hash and
-   phone privately (not as command-line arguments). Complete Telegram login
-   code and optional 2FA prompts.
-4. `chatpulse status` reports only whether the local secret exists; it does
+3. Run `chatpulse login` in a terminal. The guided wizard validates the
+   API ID, API hash and international phone number before connecting. Hash,
+   phone, login code and 2FA password display as `*` while typing or pasting;
+   press Enter **once** to submit each field. All fields use no-input-history
+   prompts (no secret recall with the Up arrow).
+4. ChatPulse reports when it connects, requests the code, verifies it and
+   saves the session. An accepted code request does not guarantee delivery:
+   check the Telegram service chat, SMS or configured login email. If a code
+   does not arrive, use Ctrl+C instead of repeatedly requesting codes.
+5. `chatpulse status` reports only whether the local secret exists; it does
    not make a Telegram API call or verify that the session remains valid.
-5. `chatpulse logout` revokes the session at Telegram and then removes the
+6. `chatpulse logout` revokes the session at Telegram and then removes the
    stored secret. It requires an interactive confirmation. If revocation
    cannot be confirmed, use Telegram **Settings > Devices**.
 
