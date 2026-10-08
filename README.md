@@ -90,6 +90,27 @@ to prevent silent truncation. `chatpulse logout` clears the saved group.
 This is a privacy-preserving integration smoke test, **not** a digest generator
 or a Telegram message sender. No local LLM is called yet.
 
+## On-device Ollama digest (experimental)
+
+After `chatpulse login --qr` and `chatpulse select-chat`, you can generate
+an in-memory group summary with a **downloaded local model**. Ollama's cloud
+features must be **disabled in the Ollama server config** and Ollama
+restarted; merely connecting to `localhost` is *not* enough.
+
+```sh
+# After configuring ~/.ollama/server.json and pulling a local model yourself:
+chatpulse local-models
+chatpulse digest --model qwen3:4b --date 2026-10-08
+# Optional: --tone neutral
+```
+
+The digest uses the approved group's 07:00–18:00 window, redacts and
+pseudonymizes messages before local inference, and prints the result
+**only to your terminal**. It never uploads, sends to Telegram, or saves
+chat content. Large chats are summarized in bounded stages.
+
+See [Ollama setup and security limitations](docs/OLLAMA.md).
+
 ## Defaults for the future digest
 
 - Timezone: `Asia/Yekaterinburg` (configurable later).
