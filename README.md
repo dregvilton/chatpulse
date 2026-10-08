@@ -2,8 +2,9 @@
 
 **Privacy-first Telegram chat digests powered by local language models.**
 
-> **Early development:** Auth and an isolated history-reader library are
-> implemented, but the end-to-end digest pipeline is not yet available.
+> **Experimental:** Telegram group selection and history reading are tested
+> on a real account. Local Ollama digest code is available for user testing,
+> but real-device model inference and a scheduled workflow remain unverified.
 
 ChatPulse aims to produce scheduled summaries of busy Telegram conversations,
 without sending private chat content to cloud AI services.
@@ -12,8 +13,8 @@ without sending private chat content to cloud AI services.
 
 - **Telegram sessions:** native OS keyring only (macOS Keychain, Windows
   Credential Manager, approved Linux Secret Service/KWallet).
-- **Local models:** only local inference is planned; cloud Ollama models and
-  remote API providers will be rejected.
+- **Local models:** local-only Ollama mode is required; ChatPulse refuses
+  known cloud/remote model configurations and non-loopback inference.
 - **Privacy:** model-facing fields are allowlisted, with pseudonyms and
   best-effort redaction. This does **not** guarantee anonymity.
 - **Safety:** no telemetry, message-content logs, session files in the
@@ -87,8 +88,8 @@ and prints counts, anonymous participant count and first/last times —
 window; `--date` can inspect another past date. A message limit is enforced
 to prevent silent truncation. `chatpulse logout` clears the saved group.
 
-This is a privacy-preserving integration smoke test, **not** a digest generator
-or a Telegram message sender. No local LLM is called yet.
+This is a privacy-preserving integration smoke test, **not** a Telegram message
+sender. Only the separate, explicit `digest` command invokes a local model.
 
 ## On-device Ollama digest (experimental)
 
@@ -118,7 +119,8 @@ See [Ollama setup and security limitations](docs/OLLAMA.md).
 - Input: user-approved Telegram chat history.
 - Output: a local LLM-generated digest.
 
-There is no scheduling or digest generation command yet.
+The opt-in `digest` command is experimental. There is no scheduling or
+Telegram delivery command yet.
 
 ## Roadmap
 
