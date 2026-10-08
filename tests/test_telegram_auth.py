@@ -73,6 +73,16 @@ class AuthTests(unittest.TestCase):
             self.do_login("12345")
         self.assertEqual(self.clients, [])
 
+    def test_failed_vault_write_attempts_remote_revoke(self):
+        with patch.object(self.vault, "save_new", side_effect=RuntimeError("write failed")):
+            with self.assertRaises(RuntimeError):
+                self.do_login()
+        self.assertEqual(
+            self.clients[0].events,
+            ["connect", "request", "signin", "logout", "disconnect"],
+        )
+        self.assertIsNone(self.vault.load())
+
     def test_remote_failure_keeps_vault(self):
         self.do_login()
         def factory(api_id, api_hash, session):

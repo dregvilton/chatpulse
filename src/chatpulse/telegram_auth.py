@@ -67,7 +67,18 @@ async def login(
         session = client.session.save()
         if not session:
             raise TelegramAuthError("No session was returned")
-        vault.save_new(TelegramCredentials(api_id, api_hash, session))
+        try:
+            vault.save_new(TelegramCredentials(api_id, api_hash, session))
+        except Exception:
+            # A successful Telegram login without durable secret storage
+            # would strand an active, untracked authorization. Revoke it.
+            try:
+                await client.log_out()
+            except Exception:
+                # Remote revocation may fail; CLI instructs user to use
+                # Telegram Settings > Devices instead of claiming success.
+                pass
+            raise
     finally:
         await client.disconnect()
 
