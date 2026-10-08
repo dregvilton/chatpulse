@@ -15,6 +15,32 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["demo"]), 0)
         self.assertIn("OK: loopback-only", output.getvalue())
 
+    def test_preview_shows_counts_but_no_chat_text(self):
+        from chatpulse.group_workflow import PreviewStats
+        from datetime import date
+
+        stats = PreviewStats(
+            day=date(2026, 10, 8), messages=3, participants=2,
+            first_time="07:15", last_time="16:00", window_finished=True,
+        )
+        output = StringIO()
+        with patch("chatpulse.credentials.open_system_vault", return_value=object()):
+            with patch("chatpulse.group_workflow.preview_selected_group",
+                       return_value=stats), redirect_stdout(output):
+                self.assertEqual(main(["preview", "--date", "2026-10-08"]), 0)
+        shown = output.getvalue()
+        self.assertIn("Text messages: 3", shown)
+        self.assertIn("Participants (pseudonymized): 2", shown)
+        self.assertNotIn("password", shown)
+        self.assertNotIn("telegram secret", shown)
+
+    def test_select_chat_refuses_non_tty_before_discovery(self):
+        errors = StringIO()
+        with patch("chatpulse.cli._interactive_only",
+                   side_effect=RuntimeError("not a tty")), redirect_stderr(errors):
+            self.assertEqual(main(["select-chat"]), 1)
+        self.assertIn("Operation failed", errors.getvalue())
+
     def test_remote_doctor_rejected_without_printing_endpoint(self):
         err = StringIO()
         with redirect_stderr(err):
