@@ -25,6 +25,8 @@ class RawMessage:
     sender_name: str | None
     sent_at: datetime
     text: str
+    message_id: int | None = None
+    reply_to_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,9 +35,16 @@ class SafeMessage:
     author: str
     time: str
     text: str
+    turn: str | None = None
+    reply_to_turn: str | None = None
 
     def as_payload(self) -> dict[str, str]:
-        return {"author": self.author, "time": self.time, "text": self.text}
+        row = {"author": self.author, "time": self.time, "text": self.text}
+        if self.turn:
+            row["turn"] = self.turn
+        if self.reply_to_turn:
+            row["reply_to"] = self.reply_to_turn
+        return row
 
 
 def redact_text(text: str, aliases: Iterable[str] = ()) -> str:
@@ -60,17 +69,26 @@ def sanitize_messages(
     records = list(messages)
     alias_set = set(aliases)
     alias_set.update(m.sender_name for m in records if m.sender_name)
+    # Only transient local turn numbers reach Ollama. Raw Telegram IDs never do.
+    turns = {
+        m.message_id: f"m{i}"
+        for i, m in enumerate(records, 1)
+        if type(m.message_id) is int and m.message_id > 0
+    }
     participants: dict[int | None, str] = {}
     safe = []
-    for message in records:
+    for i, message in enumerate(records, 1):
         if message.sent_at.tzinfo is None:
             raise ValueError("Messages must have timezone-aware timestamps")
         if message.sender_id not in participants:
             participants[message.sender_id] = f"Participant {len(participants) + 1}"
+        reply = turns.get(message.reply_to_id)
         safe.append(SafeMessage(
             author=participants[message.sender_id],
             time=message.sent_at.astimezone(zone).strftime("%H:%M"),
             text=redact_text(message.text, alias_set),
+            turn=f"m{i}",
+            reply_to_turn=reply if reply != f"m{i}" else None,
         ))
     return safe
 
