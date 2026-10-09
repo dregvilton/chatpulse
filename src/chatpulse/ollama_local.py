@@ -21,6 +21,23 @@ class LocalModelError(RuntimeError):
     """Errors are deliberately non-sensitive; never echo response bodies."""
 
 
+class OllamaHTTPError(LocalModelError):
+    """HTTP status and local API route are safe diagnostics, not response text."""
+
+    def __init__(self, *, status: int, route: str):
+        super().__init__("Ollama request failed (HTTP error)")
+        self.status = status
+        self.route = route
+
+
+class OllamaConnectionError(LocalModelError):
+    """A socket/transport failure, without sensitive exception text."""
+
+
+class OllamaCompletionError(LocalModelError):
+    """Ollama responded but the expected result was not usable."""
+
+
 MAX_JSON_RESPONSE = 2 * 1024 * 1024
 _MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
 
@@ -97,19 +114,19 @@ class OllamaLocal:
             connection.request(method, route, body=body, headers=headers)
             response = connection.getresponse()
             if response.status != 200:
-                raise LocalModelError("Ollama request failed (HTTP error)")
+                raise OllamaHTTPError(status=response.status, route=route)
             payload = response.read(MAX_JSON_RESPONSE + 1)
             if len(payload) > MAX_JSON_RESPONSE:
-                raise LocalModelError("Ollama response too large")
+                raise OllamaCompletionError("Ollama response too large")
             try:
                 result = json.loads(payload)
             except (UnicodeError, ValueError):
-                raise LocalModelError("Ollama returned invalid JSON") from None
+                raise OllamaCompletionError("Ollama returned invalid JSON") from None
             if not isinstance(result, dict):
-                raise LocalModelError("Ollama returned an unexpected response")
+                raise OllamaCompletionError("Ollama returned an unexpected response")
             return result
         except (OSError, http.client.HTTPException, TimeoutError):
-            raise LocalModelError(
+            raise OllamaConnectionError(
                 "Cannot reach local Ollama. Start Ollama and verify 127.0.0.1:11434."
             ) from None
         finally:
@@ -176,9 +193,9 @@ class OllamaLocal:
             },
         })
         if response.get("model") != model or response.get("done") is not True:
-            raise LocalModelError("Ollama model or completion mismatch")
+            raise OllamaCompletionError("Ollama model or completion mismatch")
         message = response.get("message")
         result = message.get("content") if isinstance(message, dict) else None
         if not isinstance(result, str) or not result.strip() or len(result) > 8000:
-            raise LocalModelError("Ollama returned empty or oversized output")
+            raise OllamaCompletionError("Ollama returned empty or oversized output")
         return result.strip()
