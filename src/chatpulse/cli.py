@@ -153,19 +153,19 @@ def _local_models() -> None:
 def _format_group_post(*, digest: str, window, message_count: int) -> str:
     """Escape model text before applying a small, controlled Telegram HTML skin."""
     body = escape(redact_text(digest.strip()))
-    body = re.sub(r"\\*\\*([^*\\n]{1,120})\\*\\*", r"<b>\\1</b>", body)
+    body = re.sub(r"\*\*([^*\n]{1,120})\*\*", r"<b>\1</b>", body)
     cutoff = (
         window.end.strftime("%H:%M")
         if window.end.date() == window.start.date() else "24:00"
     )
     header = (
-        "⚡ <b>CHATPULSE · ДАЙДЖЕСТ</b> ⚡\\n"
+        "⚡ <b>CHATPULSE · ДАЙДЖЕСТ</b> ⚡\n"
         f"📅 <b>{window.start:%d.%m.%Y}</b> · "
-        f"{window.start:%H:%M}–{cutoff} (ЕКБ)\\n"
-        "━━━━━━━━━━━━\\n"
+        f"{window.start:%H:%M}–{cutoff} (ЕКБ)\n"
+        "━━━━━━━━━━━━\n"
     )
     footer = (
-        "\\n━━━━━━━━━━━━\\n"
+        "\n━━━━━━━━━━━━\n"
         f"🧠 <i>Локально · {message_count} сообщений</i>"
     )
     rendered = header + body + footer
