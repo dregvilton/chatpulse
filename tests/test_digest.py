@@ -242,7 +242,7 @@ class DigestTests(unittest.TestCase):
 
             def chat(self, **kwargs):
                 self.calls.append(kwargs)
-                if len(self.calls) <= 2:
+                if "НОВЫЕ СООБЩЕНИЯ" in kwargs["user"]:
                     return "Случилось «Вымышленная дословная цитата»"
                 return "• Нельзя уверенно подтвердить историю"
 
