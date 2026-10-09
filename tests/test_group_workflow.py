@@ -1,6 +1,6 @@
 """Fake Telethon flows prove consent, vault selection and data minimization."""
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -9,7 +9,8 @@ from telethon.tl.types import InputPeerChannel, InputPeerChat
 
 from chatpulse.credentials import CredentialVault, SecureStorageError, TelegramCredentials
 from chatpulse.group_workflow import (
-    approve_group, most_recent_completed_day, preview_selected_group,
+    approve_group, resolve_window, preview_selected_group,
+    read_selected_safe_history, image_kind,
 )
 from chatpulse.selection import SelectedChat
 from tests.fakes import FakeKeyring
@@ -48,6 +49,12 @@ class FakeClient:
         for message in self.messages:
             yield message
 
+    async def download_media(self, message, file=None, **kwargs):
+        self.events.append("download")
+        if file is not bytes:
+            raise AssertionError("Media must download into memory")
+        return b"synthetic image, no personal information"
+
 
 def fake_msg(hour, content, sender):
     return SimpleNamespace(
@@ -68,6 +75,216 @@ class GroupWorkflowTests(unittest.TestCase):
         self.assertEqual((api_id, api_hash), (123, "a" * 32))
         self.assertEqual(session, "1" + "Q" * 100)
         return self.client
+
+    def test_real_pillow_conversion_stays_bounded_in_memory(self):
+        from io import BytesIO
+        from PIL import Image
+        from chatpulse.group_workflow import prepare_image_jpeg
+
+        original = Image.new("RGB", (1200, 800), (14, 40, 155))
+        raw = BytesIO()
+        original.save(raw, format="PNG")
+        jpeg = prepare_image_jpeg(raw.getvalue())
+        self.assertTrue(jpeg.startswith(bytes((255, 216))))
+        self.assertLess(len(jpeg), 900_000)
+        with Image.open(BytesIO(jpeg)) as check:
+            self.assertLessEqual(check.width, 768)
+            self.assertLessEqual(check.height, 768)
+        with self.assertRaises(ValueError):
+            prepare_image_jpeg(b"x" * 3_000_001)
+
+    def test_media_classification_is_strict(self):
+        jpeg = SimpleNamespace(photo=object(), sticker=None, gif=None, file=None)
+        sticker = SimpleNamespace(photo=None, sticker=object(), gif=None,
+                                  file=SimpleNamespace(mime_type="image/webp"))
+        animated = SimpleNamespace(photo=None, sticker=object(), gif=None,
+                                   file=SimpleNamespace(mime_type="application/x-tgsticker"))
+        self.assertEqual(image_kind(jpeg), "фото")
+        self.assertEqual(image_kind(sticker), "стикер")
+        self.assertEqual(image_kind(animated), "анимированный стикер")
+        self.assertIsNone(image_kind(SimpleNamespace()))
+
+    def test_opt_in_photo_is_described_locally_and_links_replies(self):
+        from unittest.mock import Mock
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        photo = fake_msg(12, "", 3)
+        photo.id = 5501
+        photo.reply_to_msg_id = None
+        photo.photo = object()
+        photo.file = SimpleNamespace(size=300, mime_type="image/jpeg")
+        response = fake_msg(12, "Ахаха, норм картинка", 4)
+        response.id = 5502
+        response.reply_to_msg_id = 5501
+        self.client.messages = [response, photo]  # newest first
+        vision = Mock()
+        vision.describe_image.return_value = "Мем про рыжего кота и компьютер"
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            _, _, result = asyncio.run(read_selected_safe_history(
+                self.vault, client_factory=self.factory,
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                vision_client=vision, vision_model="qwen3-vl:4b",
+            ))
+        self.assertEqual(len(result), 2)
+        self.assertIn("[фото: Мем про рыжего кота", result[0].text)
+        self.assertEqual(result[1].reply_to_turn, "m1")
+        self.assertEqual(vision.ensure_local.call_count, 1)
+        self.assertEqual(vision.describe_image.call_count, 1)
+        self.assertIn("download", self.client.events)
+
+    def test_visual_empty_completion_degrades_to_text_only(self):
+        from chatpulse.ollama_local import VisionDescriptionError
+        from unittest.mock import Mock
+
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        photos = []
+        for i in range(3):
+            pic = fake_msg(12, f"Текст про картинку {i}", i + 1)
+            pic.photo = object()
+            pic.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+            photos.append(pic)
+        self.client.messages = photos
+        vision = Mock()
+        vision.describe_image.side_effect = VisionDescriptionError(
+            "empty-description"
+        )
+        reasons = []
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            _, _, safe = asyncio.run(read_selected_safe_history(
+                self.vault, client_factory=self.factory,
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                vision_client=vision, vision_model="qwen3-vl:4b-instruct",
+                on_vision_warning=reasons.append,
+            ))
+        self.assertEqual(len(safe), 3)
+        self.assertEqual(self.client.events.count("download"), 1)
+        self.assertEqual(vision.describe_image.call_count, 1)
+        self.assertEqual(reasons, ["empty-description"])
+        self.assertTrue(all("Текст про картинку" in msg.text for msg in safe))
+        self.assertEqual(
+            sum("описание недоступно" in msg.text for msg in safe), 1
+        )
+        self.assertEqual(
+            sum("локальное описание временно недоступно" in msg.text
+                for msg in safe), 2
+        )
+        self.assertNotIn("PRIVATE", str([m.text for m in safe]))
+
+    def test_invalid_local_model_verification_still_fails_closed(self):
+        from chatpulse.ollama_local import OllamaCompletionError
+        from unittest.mock import Mock
+
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        pic = fake_msg(12, "Это приватное тестовое сообщение", 3)
+        pic.photo = object()
+        pic.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        self.client.messages = [pic]
+        vision = Mock()
+        vision.describe_image.side_effect = OllamaCompletionError(
+            "Ollama returned invalid JSON"
+        )
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            with self.assertRaises(OllamaCompletionError):
+                asyncio.run(read_selected_safe_history(
+                    self.vault, client_factory=self.factory,
+                    now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                    vision_client=vision, vision_model="qwen3-vl:4b-instruct",
+                ))
+        self.assertEqual(self.client.events[-1], "disconnect")
+
+    def test_sample_vision_only_processes_newest_selected_messages(self):
+        from unittest.mock import Mock
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        newest_photo = fake_msg(12, "Новая фотография", 7)
+        newest_photo.photo = object()
+        newest_photo.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        old_photo = fake_msg(10, "", 9)
+        old_photo.photo = object()
+        old_photo.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        # Newest-first: the old picture is outside the sample.
+        self.client.messages = (
+            [newest_photo]
+            + [fake_msg(12, f"Новый текст {i}", 8) for i in range(99)]
+            + [old_photo]
+        )
+        vision = Mock()
+        vision.describe_image.return_value = "На фото рыжая кошка"
+        described = []
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            _, _, safe = asyncio.run(read_selected_safe_history(
+                self.vault, client_factory=self.factory,
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                vision_client=vision, vision_model="qwen3-vl:4b-instruct",
+                sample_messages=100,
+                on_vision_described=lambda: described.append(True),
+            ))
+        self.assertEqual(len(safe), 100)
+        self.assertEqual(self.client.events.count("download"), 1)
+        self.assertEqual(vision.describe_image.call_count, 1)
+        self.assertEqual(len(described), 1)
+        self.assertIn("На фото рыжая кошка", safe[-1].text)
+
+    def test_sample_ignores_images_outside_newest_100(self):
+        from unittest.mock import Mock
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        old_photo = fake_msg(10, "", 9)
+        old_photo.photo = object()
+        old_photo.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        self.client.messages = (
+            [fake_msg(12, f"Недавнее сообщение {i}", 8) for i in range(100)]
+            + [old_photo]
+        )
+        vision = Mock()
+        _, _, safe = asyncio.run(read_selected_safe_history(
+            self.vault, client_factory=self.factory,
+            now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+            vision_client=vision, vision_model="qwen3-vl:4b-instruct",
+            sample_messages=100,
+        ))
+        self.assertEqual(len(safe), 100)
+        self.assertNotIn("download", self.client.events)
+        vision.describe_image.assert_not_called()
+
+    def test_media_is_never_downloaded_without_opt_in(self):
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        pic = fake_msg(12, "", 3)
+        pic.photo = object()
+        pic.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        self.client.messages = [pic, fake_msg(11, "Текст", 4)]
+        _, _, safe = asyncio.run(read_selected_safe_history(
+            self.vault, client_factory=self.factory,
+            now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+        ))
+        self.assertEqual([x.text for x in safe], ["Текст"])
+        self.assertNotIn("download", self.client.events)
+
+    def test_visual_budget_does_not_download_excess_images(self):
+        from unittest.mock import Mock
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        photos = []
+        for i in range(3):
+            pic = fake_msg(12, "", i + 1)
+            pic.photo = object()
+            pic.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+            photos.append(pic)
+        self.client.messages = photos
+        vision = Mock()
+        vision.describe_image.return_value = "На фото кот"
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            _, _, safe = asyncio.run(read_selected_safe_history(
+                self.vault, client_factory=self.factory,
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                vision_client=vision, vision_model="qwen3-vl:4b",
+                max_images=1,
+            ))
+        self.assertEqual(len(safe), 3)
+        self.assertEqual(self.client.events.count("download"), 1)
+        self.assertEqual(vision.describe_image.call_count, 1)
+        self.assertEqual(sum("лимит" in x.text for x in safe), 2)
 
     def test_no_consent_performs_no_telegram_calls(self):
         async def fail_select(limit):
@@ -128,10 +345,11 @@ class GroupWorkflowTests(unittest.TestCase):
             self.vault, day=date(2026, 10, 8), client_factory=self.factory,
             now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
         ))
-        self.assertEqual(stats.messages, 2)
+        self.assertEqual(stats.messages, 3)
         self.assertEqual(stats.participants, 2)
-        self.assertEqual((stats.first_time, stats.last_time), ("14:00", "17:00"))
-        self.assertTrue(stats.window_finished)
+        self.assertEqual((stats.first_time, stats.last_time), ("06:00", "17:00"))
+        self.assertFalse(stats.window_finished)
+        self.assertEqual((stats.window_start, stats.window_end), ("00:00", "19:00"))
         self.assertEqual(self.client.allowed_peer.channel_id, 555)
         self.assertEqual(self.client.allowed_peer.access_hash, -777)
         self.assertEqual(self.client.events[-1], "disconnect")
@@ -158,16 +376,57 @@ class GroupWorkflowTests(unittest.TestCase):
         with self.assertRaises(SecureStorageError):
             self.vault.load_selected_chat()
 
-    def test_previous_full_window_default(self):
-        self.assertEqual(
-            most_recent_completed_day(datetime(2026, 10, 8, 10, tzinfo=timezone.utc)),
-            date(2026, 10, 7),
-        )
-        self.assertEqual(
-            most_recent_completed_day(datetime(2026, 10, 8, 13, tzinfo=timezone.utc)),
-            date(2026, 10, 8),
-        )
+    def test_today_includes_messages_after_1800(self):
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        self.client.messages = [
+            fake_msg(14, "19:00", 3),
+            fake_msg(13, "18:00", 2),
+            fake_msg(12, "17:00", 1),
+        ]
+        stats = asyncio.run(preview_selected_group(
+            self.vault, day=date(2026, 10, 8), client_factory=self.factory,
+            now=datetime(2026, 10, 8, 14, 45, tzinfo=timezone.utc),
+            from_time=time(7),
+        ))
+        self.assertEqual(stats.messages, 3)
+        self.assertEqual(stats.window_start, "07:00")
+        self.assertEqual(stats.window_end, "19:45")
 
+    def test_past_date_full_day_and_explicit_end(self):
+        now = datetime(2026, 10, 9, 14, tzinfo=timezone.utc)
+        window = resolve_window(day=date(2026, 10, 8), now=now)
+        self.assertEqual(window.start.strftime("%Y-%m-%d %H:%M"),
+                         "2026-10-08 00:00")
+        self.assertEqual(window.end.strftime("%Y-%m-%d %H:%M"),
+                         "2026-10-09 00:00")
+        bounded = resolve_window(
+            day=date(2026, 10, 8), now=now,
+            from_time=time(7), to_time=time(19, 30),
+        )
+        self.assertTrue(bounded.contains(datetime(
+            2026, 10, 8, 14, tzinfo=timezone.utc)))
+        self.assertFalse(bounded.contains(datetime(
+            2026, 10, 8, 15, tzinfo=timezone.utc)))
+
+    def test_invalid_future_window_fails_before_network(self):
+        now = datetime(2026, 10, 8, 14, tzinfo=timezone.utc)
+        cases = [
+            {"day": date(2026, 10, 9)},
+            {"day": date(2026, 10, 8), "to_time": time(20)},
+            {"day": date(2026, 10, 8), "from_time": time(20)},
+            {"day": date(2026, 10, 8), "from_time": time(18),
+             "to_time": time(17)},
+        ]
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                resolve_window(now=now, **case)
+
+    def test_tz_aware_times_rejected(self):
+        with self.assertRaises(ValueError):
+            resolve_window(
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                from_time=time(7, tzinfo=timezone.utc),
+            )
 
 if __name__ == "__main__":
     unittest.main()

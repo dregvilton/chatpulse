@@ -3,12 +3,25 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as clock_time, timezone
+from html import escape
+import re
 import json
 import sys
+import time
 from typing import Sequence
 
-from chatpulse.privacy import RawMessage, sanitize_messages, validate_ollama_url
+from chatpulse.privacy import RawMessage, sanitize_messages, validate_ollama_url, redact_text
+from chatpulse.ollama_local import (
+    LocalModelError, OllamaHTTPError, OllamaConnectionError, OllamaCompletionError,
+    VisionDescriptionError,
+)
+from chatpulse.digest import DigestError, DigestQuoteValidationError
+from chatpulse.ratings import RatingError
+
+
+class VisionSetupError(RuntimeError):
+    """Missing local optional image conversion package."""
 
 
 def _interactive_only() -> None:
@@ -111,21 +124,251 @@ def _select_chat() -> None:
         print("No eligible groups found in the first 200 dialogs.")
 
 
-def _preview_history(day: date | None) -> None:
+def _preview_history(day: date | None, from_time: clock_time | None = None,
+                     to_time: clock_time | None = None) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.group_workflow import preview_selected_group
 
     print("Reading the approved group history (no messages will be printed)...", flush=True)
-    stats = asyncio.run(preview_selected_group(open_system_vault(), day=day))
+    stats = asyncio.run(preview_selected_group(
+        open_system_vault(), day=day, from_time=from_time, to_time=to_time
+    ))
     print(f"Group history preview: {stats.day.isoformat()} (Asia/Yekaterinburg)")
-    print("Time window: 07:00-18:00, local timezone")
+    print(f"Time window: {stats.window_start}-{stats.window_end}, local timezone")
     print(f"Text messages: {stats.messages}")
     print(f"Participants (pseudonymized): {stats.participants}")
     if stats.first_time is not None:
         print(f"First / last message: {stats.first_time} / {stats.last_time}")
     if not stats.window_finished:
-        print("Today is not finished; these counts may be incomplete.")
+        print("Today is still ongoing; this is a snapshot at the requested cutoff.")
     print("No message contents, user IDs or group names were printed or saved.")
+
+
+def _local_models() -> None:
+    from chatpulse.ollama_local import OllamaLocal
+
+    models = OllamaLocal().local_models()
+    if not models:
+        print("No eligible downloaded local Ollama models found.")
+        return
+    print("Downloaded local models (cloud-tagged models are excluded):")
+    for item in models:
+        print(f"  {item.name} ({item.disk_bytes // (1024**2)} MiB on disk)")
+
+
+def _vision_check(model: str) -> None:
+    """Local-only test against a synthetic image; never open Telegram."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        raise VisionSetupError from None
+    from io import BytesIO
+    from chatpulse.ollama_local import OllamaLocal
+
+    synthetic = Image.new("RGB", (256, 256), "white")
+    draw = ImageDraw.Draw(synthetic)
+    draw.rectangle((35, 35, 220, 220), fill="royalblue")
+    draw.ellipse((95, 95, 165, 165), fill="yellow")
+    buffer = BytesIO()
+    synthetic.save(buffer, format="JPEG", quality=80)
+    print("Testing local vision with a generated geometric image (no Telegram access)...",
+          flush=True)
+    description = OllamaLocal().describe_image(model=model, jpeg=buffer.getvalue())
+    # This output describes only a synthetic geometric image.
+    print("Local visual description received:", redact_text(description))
+    print("Vision preflight passed. This does not verify real-chat image accuracy.")
+
+
+def _format_group_post(*, digest: str, window, message_count: int) -> str:
+    """Escape model text before applying a small, controlled Telegram HTML skin."""
+    body = escape(redact_text(digest.strip()))
+    body = re.sub(r"\*\*([^*\n]{1,120})\*\*", r"<b>\1</b>", body)
+    cutoff = (
+        window.end.strftime("%H:%M")
+        if window.end.date() == window.start.date() else "24:00"
+    )
+    header = (
+        "⚡ <b>CHATPULSE · ДАЙДЖЕСТ</b> ⚡\n"
+        f"📅 <b>{window.start:%d.%m.%Y}</b> · "
+        f"{window.start:%H:%M}–{cutoff} (ЕКБ)\n"
+        "━━━━━━━━━━━━\n"
+    )
+    footer = (
+        "\n━━━━━━━━━━━━\n"
+        f"🧠 <i>Локально · {message_count} сообщений</i>"
+    )
+    rendered = header + body + footer
+    if len(rendered.encode("utf-16-le")) // 2 > 3900:
+        raise ValueError("Formatted digest is too large to send safely")
+    return rendered
+
+
+async def _send_group_post(vault, rendered: str) -> None:
+    """One requested publication to the same Telegram group as history reads."""
+    from chatpulse.telegram_auth import _make_client
+    selected = vault.load_selected_chat()
+    creds = vault.load()
+    if selected is None or creds is None:
+        raise ValueError("No approved group or Telegram login")
+    client = _make_client(creds.api_id, creds.api_hash, creds.session)
+    try:
+        await asyncio.wait_for(client.connect(), timeout=45)
+        if not await client.is_user_authorized():
+            raise ValueError("Telegram authorization expired")
+        # Do not retry an ambiguous send; the first one might have succeeded.
+        await asyncio.wait_for(
+            client.send_message(
+                selected.input_peer(), rendered, parse_mode="html",
+                link_preview=False,
+            ),
+            timeout=90,
+        )
+    finally:
+        await client.disconnect()
+
+
+def _digest_history(*, day: date | None, model: str, tone: str,
+                    from_time: clock_time | None = None,
+                    to_time: clock_time | None = None,
+                    sample_messages: int | None = None,
+                    send: bool = False, vision_model: str | None = None,
+                    max_images: int = 4,
+                    review_send: bool = False) -> None:
+    from chatpulse.credentials import open_system_vault
+    from chatpulse.digest import summarize_safe_messages
+    from chatpulse.group_workflow import read_selected_safe_history
+    from chatpulse.ollama_local import OllamaLocal
+
+    # Reject invalid sampling arguments before network reads or model inference.
+    if sample_messages is not None and not 20 <= sample_messages <= 250:
+        raise ValueError("Sample size must be between 20 and 250 messages")
+    if (send or review_send) and sample_messages is not None:
+        raise ValueError("Cannot publish a partial sample to the Telegram group")
+    if send and review_send:
+        raise ValueError("Use either --send or --review-send, not both")
+    if review_send:
+        _interactive_only()
+
+    # Privacy gate before the first chat-history request. No Telegram content
+    # is retrieved unless local model/configuration checks are successful.
+    if vision_model is not None:
+        try:
+            from PIL import Image  # noqa: F401 - optional image dependency check
+        except ImportError:
+            raise VisionSetupError from None
+    local = OllamaLocal()
+    local.ensure_local(model)
+    if vision_model is not None:
+        local.ensure_local(vision_model)
+    print("Local-only model preflight passed. Reading the approved group...", flush=True)
+    if vision_model is not None:
+        print(
+            f"Local vision enabled: up to {max_images} photos/static stickers "
+            "will be described in RAM; GIFs and animations are labeled only.",
+            flush=True,
+        )
+    visual_descriptions = [0]
+
+    def vision_described() -> None:
+        visual_descriptions[0] += 1
+
+    window, finished, messages = asyncio.run(
+        read_selected_safe_history(
+            open_system_vault(), day=day, from_time=from_time, to_time=to_time,
+            vision_client=local if vision_model is not None else None,
+            vision_model=vision_model, max_images=max_images,
+            sample_messages=sample_messages,
+            on_vision_described=vision_described,
+            on_vision_warning=lambda reason: print(
+                f"Vision warning ({reason}): image description unavailable. "
+                "Continuing with text-only context for the remaining media.",
+                flush=True,
+            ),
+        )
+    )
+    if not messages:
+        print("No text messages found in the selected time window.")
+        return
+    if vision_model is not None:
+        print(
+            f"Vision: {visual_descriptions[0]} image(s) successfully described "
+            "for this selection (no image content logged).",
+            flush=True,
+        )
+    full_count = len(messages)
+    if sample_messages is not None:
+        messages = messages[-sample_messages:]
+        print(
+            f"TEST SAMPLE: using last {len(messages)} of {full_count} messages "
+            f"({messages[0].time}–{messages[-1].time} local). "
+            "This is NOT a full-day digest.",
+            flush=True,
+        )
+    print(f"Summarizing {len(messages)} redacted messages in memory...", flush=True)
+    started = time.monotonic()
+    digest = summarize_safe_messages(
+        messages, model_client=local, model=model, tone=tone,
+        on_progress=lambda index, count: print(
+            f"  Local summary chunk {index}/{count} "
+            f"(elapsed {int(time.monotonic() - started)} s)", flush=True
+        ),
+    )
+    generation_seconds = int(time.monotonic() - started)
+    print(f"  Total generation: {generation_seconds} s, "
+          f"{digest.chunks} chunks", flush=True)
+    # Only rating metadata is persisted: no messages, media or digest text.
+    from chatpulse.ratings import RatingError, record_digest
+    feedback_ready = False
+    try:
+        record_digest(
+            model=model, count=digest.messages, chunks=digest.chunks,
+            seconds=generation_seconds, has_vision=vision_model is not None,
+            sample=sample_messages is not None,
+        )
+        feedback_ready = True
+    except RatingError:
+        print("Quality feedback could not be stored locally.", file=sys.stderr)
+    cutoff = window.end.strftime("%H:%M") if window.start.date() == window.end.date() else "24:00"
+    print(f"\nChatPulse digest — {window.start.date().isoformat()} "
+          f"({window.start.strftime('%H:%M')}–{cutoff}, Asia/Yekaterinburg)")
+    if not finished:
+        print("(Snapshot: new messages may arrive after this run.)")
+    if sample_messages is not None:
+        print("(TEST SAMPLE ONLY: not representative of the entire day.)")
+    if send:
+        print("(Local inference complete. Telegram publication was requested.)\n")
+    elif review_send:
+        print("(Review before publication. Nothing has been sent yet.)\n")
+    else:
+        print("(Local preview only. No Telegram messages sent.)\n")
+    print(digest.text)
+    should_send = send
+    if review_send:
+        # No persisted draft, no second LLM call, no accidental publication.
+        # The exact summary just shown is what Telegram will receive,
+        # wrapped in the same HTML header as normal --send.
+        post = _format_group_post(
+            digest=digest.text, window=window, message_count=len(messages)
+        )
+        print(
+            "\nPublish this digest to the previously approved Telegram group? "
+            "This action cannot be undone.",
+            flush=True,
+        )
+        should_send = input("Type SEND to publish, or Enter to cancel: ").strip() == "SEND"
+        if not should_send:
+            print("Not published. No Telegram message was sent.")
+    if should_send:
+        if not review_send:
+            post = _format_group_post(
+                digest=digest.text, window=window, message_count=len(messages)
+            )
+        print("Publishing formatted digest to the approved group...", flush=True)
+        asyncio.run(_send_group_post(open_system_vault(), post))
+        print("Digest was published to the approved Telegram group.")
+    if feedback_ready:
+        print("Rate the last digest: chatpulse rate 1..5 (5 = excellent).")
+
 
 def _logout() -> None:
     from chatpulse.credentials import open_system_vault
@@ -157,7 +400,47 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("select-chat", help="Opt in to listing groups and approve one group")
     preview_parser = sub.add_parser("preview", help="Count safe messages from approved group")
     preview_parser.add_argument("--date", type=date.fromisoformat, default=None,
-                                help="Local YYYY-MM-DD (default: latest finished day)")
+                                help="Local YYYY-MM-DD (default: today, up to now)")
+    preview_parser.add_argument("--from-time", type=clock_time.fromisoformat, default=None,
+                                help="Local HH:MM start (default 00:00)")
+    preview_parser.add_argument("--to-time", type=clock_time.fromisoformat, default=None,
+                                help="Local HH:MM cutoff (default now today, 24:00 past days)")
+    sub.add_parser("local-models", help="List eligible local Ollama models; no Telegram reads")
+    vision_check_parser = sub.add_parser(
+        "vision-check", help="Test a local vision model on a synthetic picture; no Telegram"
+    )
+    vision_check_parser.add_argument("--model", default="qwen3-vl:4b-instruct")
+    digest_parser = sub.add_parser("digest", help="Generate a local-only group digest")
+    digest_parser.add_argument("--model", required=True, help="Downloaded Ollama model")
+    digest_parser.add_argument("--date", type=date.fromisoformat, default=None,
+                               help="Local YYYY-MM-DD (default: today, up to now)")
+    digest_parser.add_argument("--tone", choices=("friends", "neutral"), default="friends")
+    digest_parser.add_argument("--from-time", type=clock_time.fromisoformat, default=None,
+                               help="Local HH:MM start (default 00:00)")
+    digest_parser.add_argument("--to-time", type=clock_time.fromisoformat, default=None,
+                               help="Local HH:MM cutoff (default now today, 24:00 past days)")
+    digest_parser.add_argument(
+        "--sample-messages", type=int, default=None,
+        help="TEST ONLY: summarize the last 20-250 messages instead of the full period"
+    )
+    digest_parser.add_argument("--send", action="store_true",
+                               help="Explicitly post the finished full digest to the approved group")
+    digest_parser.add_argument(
+        "--review-send", action="store_true",
+        help="Display a full digest; publish once only after typing SEND (no disk draft)",
+    )
+    digest_parser.add_argument(
+        "--vision-model", default=None,
+        help="OPT-IN: a downloaded local vision model (prefer qwen3-vl:4b-instruct)",
+    )
+    digest_parser.add_argument(
+        "--max-images", type=int, choices=range(1, 9), metavar="{1..8}",
+        default=4, help="Max photo/static-sticker descriptions (default 4)",
+    )
+    rate_parser = sub.add_parser(
+        "rate", help="Rate latest digest 1-5 (local metadata only)"
+    )
+    rate_parser.add_argument("score", type=int, choices=range(1, 6))
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
     try:
@@ -181,18 +464,112 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "select-chat":
             _select_chat()
         elif args.command == "preview":
-            _preview_history(args.date)
+            _preview_history(args.date, args.from_time, args.to_time)
+        elif args.command == "local-models":
+            _local_models()
+        elif args.command == "vision-check":
+            _vision_check(args.model)
+        elif args.command == "digest":
+            _digest_history(
+                day=args.date, model=args.model, tone=args.tone,
+                from_time=args.from_time, to_time=args.to_time,
+                sample_messages=args.sample_messages, send=args.send,
+                vision_model=args.vision_model, max_images=args.max_images,
+                review_send=args.review_send,
+            )
+        elif args.command == "rate":
+            from chatpulse.ratings import rate_last
+            rate_last(args.score)
+            print("Digest rating saved locally. No message text or media stored.")
         elif args.command == "logout":
             _logout()
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.", file=sys.stderr)
         return 130
+    except RatingError:
+        print(
+            "Rating failed: no recent digest, already rated, or local ratings unavailable.",
+            file=sys.stderr,
+        )
+        return 1
+    except VisionSetupError:
+        print(
+            "Optional local image processing is not installed. Run: "
+            "python -m pip install -e '.[vision]' (then retry). "
+            "No Telegram history was read.",
+            file=sys.stderr,
+        )
+        return 1
+    except VisionDescriptionError as exc:
+        print(
+            f"Local vision test returned no usable image description "
+            f"(reason: {exc.reason}). Try qwen3-vl:4b-instruct and "
+            "check your Ollama version; no Telegram data was involved "
+            "in vision-check.",
+            file=sys.stderr,
+        )
+        return 1
+    except LocalModelError as exc:
+        # Never print arbitrary exception text, response bodies, prompts,
+        # message content, or model names. Only fixed diagnostics and status.
+        if isinstance(exc, OllamaHTTPError):
+            print(
+                f"Ollama local API returned HTTP {exc.status} for {exc.route}. "
+                "Check ~/.ollama/logs/server.log for model loading or memory "
+                "errors. The server response body was suppressed.",
+                file=sys.stderr,
+            )
+        elif isinstance(exc, OllamaConnectionError):
+            print(
+                "Ollama local connection failed. Check if the server and "
+                "model runner are still running (ollama ps).",
+                file=sys.stderr,
+            )
+        elif isinstance(exc, OllamaCompletionError):
+            print(
+                "Ollama local generation returned an unusable response "
+                "(model mismatch, incomplete reply, oversized output or "
+                "invalid JSON). Check the local Ollama server log.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Local model/configuration verification failed. Check "
+                "~/.ollama/server.json, restart Ollama and run "
+                "chatpulse local-models.",
+                file=sys.stderr,
+            )
+        print(
+            "No Telegram content was sent outside the local Ollama process "
+            "by ChatPulse. If generation began, some redacted chat content "
+            "may already have reached the local model.",
+            file=sys.stderr,
+        )
+        return 1
+    except DigestQuoteValidationError:
+        print(
+            "Digest aborted: all generated stories contained unverified "
+            "verbatim quotations, including after one local retry. "
+            "No summary was saved or sent to Telegram.",
+            file=sys.stderr,
+        )
+        return 1
+    except DigestError:
+        print(
+            "Digest could not be completed within safety and size limits. "
+            "No summary was saved or sent to Telegram.",
+            file=sys.stderr,
+        )
+        return 1
     except TimeoutError:
         if args.command == "login":
             message = (
                 "Telegram did not respond in time. A login code may still "
                 "arrive; avoid repeatedly requesting new ones."
             )
+        elif args.command == "digest" and args.send:
+            message = ("Telegram delivery timed out; the message may already "
+                       "have been sent. Check the group before retrying.")
         else:
             message = "Telegram request timed out. No messages were saved."
         print(message, file=sys.stderr)

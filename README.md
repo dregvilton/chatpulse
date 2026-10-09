@@ -2,18 +2,19 @@
 
 **Privacy-first Telegram chat digests powered by local language models.**
 
-> **Early development:** Auth and an isolated history-reader library are
-> implemented, but the end-to-end digest pipeline is not yet available.
+> **Experimental:** Telegram group selection and history reading are tested
+> on a real account. Local Ollama digest code is available for user testing,
+> but the full multimodal pipeline still needs real-chat validation.
 
-ChatPulse aims to produce scheduled summaries of busy Telegram conversations,
+ChatPulse aims to produce on-demand summaries of busy Telegram conversations,
 without sending private chat content to cloud AI services.
 
 ## Security model
 
 - **Telegram sessions:** native OS keyring only (macOS Keychain, Windows
   Credential Manager, approved Linux Secret Service/KWallet).
-- **Local models:** only local inference is planned; cloud Ollama models and
-  remote API providers will be rejected.
+- **Local models:** local-only Ollama mode is required; ChatPulse refuses
+  known cloud/remote model configurations and non-loopback inference.
 - **Privacy:** model-facing fields are allowlisted, with pseudonyms and
   best-effort redaction. This does **not** guarantee anonymity.
 - **Safety:** no telemetry, message-content logs, session files in the
@@ -81,23 +82,200 @@ ChatPulse never prints or saves that content.
 
 The group ID/access hash is stored in the same **OS Keychain** as the
 account's session; its name is not retained. `preview` uses the approved
-InputPeer only, reads text messages for **07:00–18:00 Asia/Yekaterinburg**,
+InputPeer only, reads text messages within the selected local-day window,
 and prints counts, anonymous participant count and first/last times —
-**never message contents**. The default is the most recent *completed* daily
-window; `--date` can inspect another past date. A message limit is enforced
+**never message contents**. By default it reads today from 00:00 until now;
+`--date` reads a selected past day (00:00–24:00). A message limit is enforced
 to prevent silent truncation. `chatpulse logout` clears the saved group.
 
-This is a privacy-preserving integration smoke test, **not** a digest generator
-or a Telegram message sender. No local LLM is called yet.
+Preview is read-only. Only an explicit `digest --send` invokes Telegram
+publication after successful local summarization.
+
+## On-device Ollama digest (experimental)
+
+After `chatpulse login --qr` and `chatpulse select-chat`, you can generate
+an in-memory group summary with a **downloaded local model**. Ollama's cloud
+features must be **disabled in the Ollama server config** and Ollama
+restarted; merely connecting to `localhost` is *not* enough.
+
+```sh
+# After configuring ~/.ollama/server.json and pulling a local model yourself:
+chatpulse local-models
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b --date 2026-10-08 \
+  --from-time 07:00 --to-time 19:30
+# For faster model comparisons, summarize only the last 100 messages:
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
+  --date 2026-10-08 --sample-messages 100
+# Optional: --tone neutral
+```
+
+### Post a prominent daily digest to the selected Telegram group
+
+```sh
+# Safe first check: count today's messages, no sending
+chatpulse preview
+
+# Preview the full digest locally, from midnight until invocation
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
+
+# Recommended: review the generated digest, then type SEND to publish it.
+# Same generation: no duplicate model call and no draft saved to disk.
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b --review-send
+
+# Advanced/unchecked: immediately publish without confirmation.
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b --send
+```
+
+`--review-send` is recommended: show a full digest first, then type
+`SEND` in the **same interactive terminal** to publish the exact summary
+already generated. There is no saved draft, no second generation and no
+send on Enter/other input. This preserves the original no-content-on-disk
+privacy boundary. `--send` remains an **explicit unchecked immediate**
+one-time publishing action, not a schedule or background bot. Both work
+only for full digests (never with `--sample-messages`) and send one
+formatted message to the already selected
+group, and does not retry if Telegram delivery becomes ambiguous. The post
+has a bold ⚡ ChatPulse header, date, local time window and compact text.
+Review model accuracy and private details before choosing to publish.
+Telegram receives the resulting digest, not original raw chat history.
+Each subsequent run reads fresh chat messages but excludes earlier posts
+with the ChatPulse header.
+
+For multi-chunk days, the summarizer passes previous context and
+recent replies into the next chunk; technical chunk boundaries are NOT
+treated as separate discussions. This improves continuity but does not
+guarantee factual accuracy.
+
+### Rate the latest digest (1–5)
+
+After each successful `chatpulse digest` run (including previews and sends),
+ChatPulse stores **only minimal local run metadata**, never the chat, image,
+generated summary, raw Telegram IDs or group name. Rate the most recent digest
+at any time before generating another one:
+
+```sh
+chatpulse rate 5   # great, factual and funny
+chatpulse rate 3   # acceptable
+chatpulse rate 1   # wrong or unusable
+```
+
+Scores and model/duration/message-count metadata are stored on your own
+machine at `~/.chatpulse/ratings.json` (private permissions on POSIX),
+outside the repository and never sent to a server. Last 100 runs are
+retained. Rating a digest does **not** train the model by itself; these
+scores will help us compare versions before opting in to a separate,
+local-only training dataset. No automatically collected Telegram content
+is saved for training. `chatpulse rate` requires no network connection.
+
+### Remove unused Ollama experiments
+
+```sh
+ollama list
+ollama rm llama3.1:latest
+ollama rm huihui_ai/qwen3-abliterated:8b
+ollama rm dolphin3:8b
+ollama rm CognitiveComputations/dolphin-mistral-nemo:12b-v2.9.3-Q4_K_M
+```
+
+Keep your current `fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b`
+and `qwen3-vl:4b-instruct` if installed. Deleting models only affects local Ollama
+model files; confirm names with `ollama list` before deleting.
+
+### Optional local image and sticker context
+
+ChatPulse can now preserve Telegram reply-thread structure in a digest by
+mapping raw Telegram IDs to transient `m1`, `m2`, etc., and indicating
+which earlier turn each reply addresses. Raw IDs are never given to Ollama.
+
+Vision is **opt-in**. Before trying it, explicitly install the image
+preprocessing extra and download a local vision model:
+
+```sh
+python -m pip install -e '.[vision]'
+ollama pull qwen3-vl:4b-instruct
+chatpulse local-models
+# Safe visual check on a synthetic image (never reads Telegram):
+chatpulse vision-check --model qwen3-vl:4b-instruct
+
+# Preview only: includes up to 4 photos or static WebP stickers, all in RAM
+chatpulse digest \
+  --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
+  --vision-model qwen3-vl:4b-instruct --max-images 4
+
+# Recommended for real group: same generation, inspect and type SEND
+chatpulse digest \
+  --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
+  --vision-model qwen3-vl:4b-instruct --max-images 4 --review-send
+```
+
+The vision model describes eligible photos and *static* WebP stickers in
+short Russian captions, directly in memory. GIFs, videos, voice messages,
+animated stickers, oversized files, and images beyond the cap are not
+decoded. No image data or captions are written to disk or forwarded to
+remote LLM services. The original Telegram server already hosts the
+media: downloading it requires an approved, authorized group session.
+Descriptions are best-effort and can misread memes or contain identifying
+details. No media is downloaded without the explicit `--vision-model` flag.
+On a 16 GB Mac the vision model is unloaded after each image and
+the main digest model runs afterward, so the first multimodal preview
+can take longer. Test **without `--send` first**. Prefer
+`qwen3-vl:4b-instruct` over the `qwen3-vl:4b` alias, which currently
+points to the Thinking variant and can use all output tokens without
+producing a caption. The optional visual stage degrades to labeled
+image placeholders if the model produces an unusable completion,
+with a fixed, privacy-safe warning; it does **not** silently fabricate
+image content. Any fail-closed local model/security verification error
+still aborts the request. If you installed an older Thinking version,
+keep it until the Instruct smoke test works, then optionally remove it
+with `ollama rm qwen3-vl:4b`.
+
+For less-filtered text in friends' chats, experiment with a downloaded
+uncensored/abliterated model, such as
+`fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b`. First check
+`ollama run MODEL "Привет"` independently before a private chat digest.
+The default `friends` tone now preserves actual profanity and teasing
+without moralizing or inventing jokes. For one-chunk samples ChatPulse
+summarizes the redacted messages directly instead of losing details through
+two LLM passes. Model quality and factual accuracy must be reviewed.
+
+`--sample-messages 20..250` is a **quick test only**, not a full-day
+digest. It reads the chosen time window into memory, uses only its last
+N redacted messages for inference, clearly labels the output as partial,
+and does not save or transmit anything beyond the local model process.
+Vision descriptions are now attempted only for eligible media **within**
+the sampled newest-N messages, not older images encountered when
+scanning the whole day's history. CLI prints only the number of
+successfully described images, never the media content.
+
+One-chunk samples containing 30+ messages use a grounded two-pass
+summarization: first extract important episodes with exact source
+quotes, discard unsupported quoted phrases, then create the final
+summary while still seeing the original redacted messages.
+This costs an extra local model invocation and improves the
+evidence available to the final model, but does not guarantee
+absence of hallucinations. Cached sender display names/usernames
+are used as extra local redaction aliases when available without
+making contact requests; unrecognized free-text names still may leak.
+
+The digest uses today's messages until invocation by default, or an explicit
+local time range, redacts and
+pseudonymizes messages before local inference, and prints the result
+to your terminal. **Only `--send` additionally posts the generated digest**
+to the selected Telegram group. Large chats are summarized in bounded stages.
+
+See [Ollama setup and security limitations](docs/OLLAMA.md).
 
 ## Defaults for the future digest
 
-- Timezone: `Asia/Yekaterinburg` (configurable later).
-- Window: `07:00–18:00` local time (configurable later).
+- Timezone: `Asia/Yekaterinburg`.
+- Window: 00:00 to invocation for today; 00:00 to 24:00 for past days.
+- Optional `--from-time HH:MM` and `--to-time HH:MM` for a custom window.
 - Input: user-approved Telegram chat history.
 - Output: a local LLM-generated digest.
 
-There is no scheduling or digest generation command yet.
+The opt-in `digest` command is experimental and runs only when invoked.
+No unattended scheduling exists. Delivery is opt-in via `--send`.
 
 ## Roadmap
 

@@ -15,12 +15,11 @@
 4. OS keyrings are not protection against malware running with the same
    user privileges. A compromised Python interpreter or OS account could
    still access stored secrets; review packages before installation.
-5. **Model input (planned):** only safe model-facing projections;
+5. **Model input:** only safe model-facing projections;
    never send raw Telegram objects, ID, contacts, files or location payloads.
-6. **Local inference (planned):** numeric loopback-only model origin, no
-   redirects or environment proxy usage. Loopback alone is insufficient:
-   Ollama supports remotely hosted models. The future adapter must require
-   cloud disabled and refuse cloud model names before digest features launch.
+6. **Local inference (experimental):** numeric loopback-only model origin,
+   no redirects or environment proxy usage. Ollama cloud mode is explicitly
+   disabled in server config, and local model status is checked per request.
 7. No analytics or telemetry. No logs or exception strings containing
    message texts, session keys, names, API hashes, phone, codes or passwords.
 8. Redaction is best effort, **not guaranteed anonymity**. Chat references,
@@ -53,18 +52,48 @@
   and times. No messages are sent to any model, logged or exported.
 - A group allowlist is a code-level protection against accidental reads, not
   a capability-security boundary on the Telegram session itself.
-- Live real-account testing is required before claiming the entire path
-  works against Telegram. CI uses fake clients without network access.
+- Real Mac verification succeeded for group selection and preview; CI also
+  uses fake Telegram clients for isolated regression tests.
 
-## Pending before first real digest
+## Experimental on-device inference
 
-- Explicit approved chat/entity resolution with no dialog enumeration;
-  limited history scope, dry-run and non-LLM fixture tests.
-- Stronger redaction tests and prompt-injection isolation.
-- Local Ollama adapter, disable cloud features, refuse remote models,
-  proxies and redirects; never automatically download models.
-- Large context handling, final delivery guard and production review.
-- Packaging supply-chain checks, secret scan and robust version pinning.
+- `chatpulse digest` will **not read Telegram history** until it has
+  verified the local Ollama cloud-disable config and the selected model.
+- Its HTTP client connects directly to a numeric loopback address with
+  no proxy following, redirect handling or DNS lookup.
+- The selected model must be downloaded and appear in the local model list;
+  names marked `cloud` or entries with `remote_host` or `remote_model`
+  are excluded. We check those properties before each inference request.
+- Cloud disabling must be configured on the **actual Ollama server**;
+  ChatPulse can check the local `~/.ollama/server.json`, but cannot attest
+  that a compromised daemon obeys it or has restarted.
+- Content sent to the local model is best-effort redacted, not guaranteed
+  anonymous. Any summary printed to a local terminal remains visible in
+  terminal scrollback and potentially to local malware.
+- Prompts explicitly treat chat contents as data, not instructions;
+  prompt-injection attacks can still influence LLM output.
+- No automatic model downloads, system prompts containing user secrets,
+  remote LLM requests, content logs or scheduled delivery. Explicit
+  `digest --send` transmits the generated summary to the approved Telegram
+  group using the authenticated user account; Telegram and its recipients
+  can then store/forward it. `--sample-messages` cannot be combined with
+  `--send`. ChatPulse does not retry ambiguous sends.
+- In multi-chunk digests prior pseudonymized summary notes and a bounded
+  overlap of safe chat messages are supplied as context to later chunks;
+  this increases model input but never sends raw Telegram objects to an LLM.
+  The model may still hallucinate people and events.
+- See [Ollama setup and trust boundaries](OLLAMA.md).
+
+## Pending for production readiness
+
+- Inspect quality and factual fidelity of an alternative model against real
+  chat messages, without uploading private chat content.
+- Evaluate local summary performance and bounded adaptive scheduling; currently
+  all runs are manual and the current day ends at invocation.
+- Stronger free-text redaction and prompt-injection resistance tests.
+- Real-device testing of opt-in delivery, safe sender permissions, production
+  security review and dependency pinning.
+- Packaging supply-chain verification and secret scanning.
 
 ## Vulnerability reporting
 
