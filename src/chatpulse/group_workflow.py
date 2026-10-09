@@ -157,6 +157,8 @@ async def read_selected_safe_history(
     vision_model: str | None = None,
     max_images: int = 4,
     on_vision_warning: Callable[[str], None] | None = None,
+    on_vision_described: Callable[[], None] | None = None,
+    sample_messages: int | None = None,
 ):
     """Only the approved group, optional capped RAM-only visual description."""
     if (vision_client is None) != (vision_model is None):
@@ -210,6 +212,8 @@ async def read_selected_safe_history(
                 description = await asyncio.to_thread(
                     vision_client.describe_image, model=vision_model, jpeg=jpeg
                 )
+                if on_vision_described is not None:
+                    on_vision_described()
                 return prefix + ": " + redact_text(description)[:550] + "]"
             except VisionDescriptionError as exc:
                 # Fail soft only for an already verified model's unusable
@@ -228,6 +232,7 @@ async def read_selected_safe_history(
                 chat_id=selected.peer_id, allowed_chat_ids=frozenset({selected.peer_id}),
                 window=window, max_messages=max_messages,
                 media_describer=describe_attachment if vision_client is not None else None,
+                media_sample_limit=sample_messages if vision_client is not None else None,
             ),
             timeout=180 + (max_images * 240 if vision_client is not None else 0),
         )
