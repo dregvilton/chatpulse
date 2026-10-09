@@ -56,6 +56,23 @@ class HistoryTests(unittest.TestCase):
                 window=daily_window(date(2026, 10, 8)), max_messages=1,
             ))
 
+    def test_prior_chatpulse_digest_is_not_included_in_new_digest(self):
+        from chatpulse.history import DigestWindow
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo("Asia/Yekaterinburg")
+        w = DigestWindow(
+            datetime(2026, 10, 8, 0, tzinfo=zone),
+            datetime(2026, 10, 9, 0, tzinfo=zone),
+        )
+        c = FakeClient([
+            msg(14, "⚡ CHATPULSE · ДАЙДЖЕСТ ⚡\\nOld digest"),
+            msg(13, "Actual new message"),
+        ])
+        result = asyncio.run(collect_history(
+            c, chat_id=11, allowed_chat_ids=frozenset({11}), window=w,
+        ))
+        self.assertEqual([item.text for item in result], ["Actual new message"])
+
     def test_media_skipped(self):
         output = asyncio.run(collect_history(FakeClient([msg(5, None), msg(4, "text")]),
              chat_id=11, allowed_chat_ids=frozenset({11}),
