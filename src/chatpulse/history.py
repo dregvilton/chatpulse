@@ -61,6 +61,9 @@ async def collect_history(client: HistoryClient, *, chat_id: int,
         text = getattr(item, "message", None)
         if not isinstance(text, str) or not text.strip():
             continue
+        # Don't summarize earlier ChatPulse posts as if they were chat replies.
+        if text.startswith("⚡ CHATPULSE · ДАЙДЖЕСТ ⚡"):
+            continue
         if len(output) >= max_messages:
             raise ValueError("Message limit exceeded; refusing partial digest")
         output.append(RawMessage(sender_id=getattr(item, "sender_id", None),
