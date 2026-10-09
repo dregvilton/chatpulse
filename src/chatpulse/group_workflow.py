@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from io import BytesIO
 from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -15,6 +16,7 @@ from chatpulse.credentials import CredentialVault
 from chatpulse.history import (
     DEFAULT_TIMEZONE, DigestWindow, collect_safe_history,
 )
+from chatpulse.privacy import redact_text
 from chatpulse.selection import (
     GroupChoice, SelectedChatHistoryClient, discover_groups,
 )
@@ -99,6 +101,48 @@ async def approve_group(
         await client.disconnect()
 
 
+
+def image_kind(item: Any) -> str | None:
+    """Only images, static WebP stickers, and explicit GIF placeholders."""
+    if getattr(item, "photo", None) is not None:
+        return "фото"
+    if getattr(item, "sticker", None) is not None:
+        mime = getattr(getattr(item, "file", None), "mime_type", None)
+        if mime == "image/webp":
+            return "стикер"
+        return "анимированный стикер"
+    if getattr(item, "gif", None) is not None:
+        return "GIF"
+    return None
+
+
+def prepare_image_jpeg(content: bytes) -> bytes:
+    """Downscale an in-RAM source image, rejecting decompression bombs."""
+    if not isinstance(content, bytes) or not 0 < len(content) <= 3_000_000:
+        raise ValueError("Invalid or oversized image bytes")
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ImportError as exc:
+        raise RuntimeError("Install optional Pillow vision dependency") from exc
+    try:
+        with Image.open(BytesIO(content)) as source:
+            if source.width * source.height > 4_000_000:
+                raise ValueError("Image pixel count exceeded")
+            if getattr(source, "n_frames", 1) > 1:
+                raise ValueError("Animated images cannot be described as static")
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail((768, 768))
+            clean = image.convert("RGB")
+            buffer = BytesIO()
+            clean.save(buffer, format="JPEG", quality=76, optimize=True)
+            jpeg = buffer.getvalue()
+            if len(jpeg) > 900_000:
+                raise ValueError("JPEG output exceeds local vision limit")
+            return jpeg
+    except (OSError, ValueError, UnidentifiedImageError) as exc:
+        raise ValueError("Unsupported local image") from exc
+
+
 async def read_selected_safe_history(
     vault: CredentialVault,
     *,
@@ -108,8 +152,17 @@ async def read_selected_safe_history(
     max_messages: int = 5000,
     client_factory: Callable[[int, str, str], Any] = _make_client,
     now: datetime | None = None,
+    vision_client: Any | None = None,
+    vision_model: str | None = None,
+    max_images: int = 4,
 ):
-    """Only the approved group, only safe projections; no content printed."""
+    """Only the approved group, optional capped RAM-only visual description."""
+    if (vision_client is None) != (vision_model is None):
+        raise ValueError("Vision client and model must be supplied together")
+    if type(max_images) is not int or not 1 <= max_images <= 8:
+        raise ValueError("Image limit must be 1-8")
+    if vision_client is not None:
+        vision_client.ensure_local(vision_model)
     selected = vault.load_selected_chat()
     if selected is None:
         raise TelegramAuthError("Select a group first")
@@ -126,13 +179,44 @@ async def read_selected_safe_history(
         await asyncio.wait_for(client.connect(), timeout=45)
         if not await client.is_user_authorized():
             raise TelegramAuthError("Telegram session is no longer authorized")
+        analyzed = 0
+
+        async def describe_attachment(item: Any) -> str | None:
+            nonlocal analyzed
+            kind = image_kind(item)
+            if kind is None:
+                return None
+            if kind in ("анимированный стикер", "GIF"):
+                return f"[{kind}: анимация пока не распознаётся]"
+            emoji = getattr(getattr(item, "file", None), "emoji", None)
+            prefix = f"[{kind}{' ' + emoji if isinstance(emoji, str) and len(emoji) <= 8 else ''}"
+            if analyzed >= max_images:
+                return prefix + ": описание пропущено (лимит)]"
+            size = getattr(getattr(item, "file", None), "size", None)
+            if type(size) is not int or not 0 < size <= 3_000_000:
+                return prefix + ": слишком большое или неизвестный размер]"
+            analyzed += 1
+            # No filenames, disk writes, redirects, or remote LLM calls.
+            blob = await client.download_media(item, file=bytes)
+            if not isinstance(blob, bytes) or len(blob) > 3_000_000:
+                return prefix + ": файл недоступен]"
+            try:
+                jpeg = await asyncio.to_thread(prepare_image_jpeg, blob)
+                description = await asyncio.to_thread(
+                    vision_client.describe_image, model=vision_model, jpeg=jpeg
+                )
+                return prefix + ": " + redact_text(description)[:550] + "]"
+            except (ValueError, OSError):
+                return prefix + ": не удалось прочитать изображение]"
+
         safe = await asyncio.wait_for(
             collect_safe_history(
                 SelectedChatHistoryClient(client, selected),
                 chat_id=selected.peer_id, allowed_chat_ids=frozenset({selected.peer_id}),
                 window=window, max_messages=max_messages,
+                media_describer=describe_attachment if vision_client is not None else None,
             ),
-            timeout=180,
+            timeout=180 + (max_images * 240 if vision_client is not None else 0),
         )
         return window, window.start.date() < local_now.date(), safe
     finally:
