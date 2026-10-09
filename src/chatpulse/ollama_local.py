@@ -189,6 +189,8 @@ class OllamaLocal:
             }],
             "stream": False,
             "think": False,
+            # Free the 4B vision model before the larger digest model loads.
+            "keep_alive": 0,
             "options": {
                 "temperature": 0.1,
                 "num_ctx": 4096,
