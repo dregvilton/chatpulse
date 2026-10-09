@@ -138,6 +138,41 @@ recent replies into the next chunk; technical chunk boundaries are NOT
 treated as separate discussions. This improves continuity but does not
 guarantee factual accuracy.
 
+### Rate the latest digest (1–5)
+
+After each successful `chatpulse digest` run (including previews and sends),
+ChatPulse stores **only minimal local run metadata**, never the chat, image,
+generated summary, raw Telegram IDs or group name. Rate the most recent digest
+at any time before generating another one:
+
+```sh
+chatpulse rate 5   # great, factual and funny
+chatpulse rate 3   # acceptable
+chatpulse rate 1   # wrong or unusable
+```
+
+Scores and model/duration/message-count metadata are stored on your own
+machine at `~/.chatpulse/ratings.json` (private permissions on POSIX),
+outside the repository and never sent to a server. Last 100 runs are
+retained. Rating a digest does **not** train the model by itself; these
+scores will help us compare versions before opting in to a separate,
+local-only training dataset. No automatically collected Telegram content
+is saved for training. `chatpulse rate` requires no network connection.
+
+### Remove unused Ollama experiments
+
+```sh
+ollama list
+ollama rm llama3.1:latest
+ollama rm huihui_ai/qwen3-abliterated:8b
+ollama rm dolphin3:8b
+ollama rm CognitiveComputations/dolphin-mistral-nemo:12b-v2.9.3-Q4_K_M
+```
+
+Keep your current `fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b`
+and `qwen3-vl:4b` if installed. Deleting models only affects local Ollama
+model files; confirm names with `ollama list` before deleting.
+
 ### Optional local image and sticker context
 
 ChatPulse can now preserve Telegram reply-thread structure in a digest by
