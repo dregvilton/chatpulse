@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import unittest
 
 from chatpulse.digest import (
-    DigestError, group_rows, message_rows, summarize_safe_messages,
+    DigestError, group_rows, group_conversation_rows, message_rows, summarize_safe_messages,
 )
 from chatpulse.privacy import RawMessage, SafeMessage
 
@@ -140,10 +140,48 @@ class DigestTests(unittest.TestCase):
         summarize_safe_messages(messages, model_client=model, model="test:8b")
         self.assertGreater(len(model.calls), 2)
         final = model.calls[-1]
-        self.assertIn("не более 170 слов", final["user"])
+        self.assertIn("не более 140 слов", final["user"])
+        self.assertIn("одну цельную историю", final["user"])
+        self.assertIn("случайные соседние шутки", final["user"])
         self.assertIn("выдуманных диалогов", final["user"])
         self.assertIn("реальных имён", final["user"])
         self.assertEqual(final["num_predict"], 650)
+
+    def test_chunks_prefer_natural_pause_without_losing_or_duplicating_rows(self):
+        import json
+        records = [
+            json.dumps({"author": "Participant 1", "time": "10:00",
+                        "text": "x" * 110})
+            for _ in range(12)
+        ] + [
+            json.dumps({"author": "Participant 2", "time": "10:30",
+                        "text": "y" * 110})
+            for _ in range(12)
+        ]
+        pieces = group_conversation_rows(records, chars_per_chunk=2000)
+        self.assertGreaterEqual(len(pieces), 2)
+        self.assertEqual(
+            [row for piece in pieces for row in piece.splitlines()], records,
+        )
+        self.assertEqual(len(pieces[0].splitlines()), 12)
+        self.assertTrue(all(len(piece) <= 2000 for piece in pieces))
+        self.assertEqual(
+            json.loads(pieces[1].splitlines()[0])["time"], "10:30",
+        )
+
+    def test_chunks_without_long_pause_still_split_safely(self):
+        import json
+        records = [
+            json.dumps({"author": "Participant 1", "time": "10:00",
+                        "text": "test" * 40})
+            for _ in range(25)
+        ]
+        chunks = group_conversation_rows(records, chars_per_chunk=2000)
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual(
+            [row for chunk in chunks for row in chunk.splitlines()], records,
+        )
+        self.assertTrue(all(len(chunk) <= 2000 for chunk in chunks))
 
     def test_chunk_bounds_and_multi_pass(self):
         model = FakeModel()
