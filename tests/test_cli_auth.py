@@ -61,6 +61,21 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["select-chat"]), 1)
         self.assertIn("Operation failed", errors.getvalue())
 
+    def test_vision_extra_must_be_installed_before_telegram_read(self):
+        import sys
+        err = StringIO()
+        with patch.dict(sys.modules, {"PIL": None}):
+            with patch("chatpulse.group_workflow.read_selected_safe_history",
+                       side_effect=AssertionError("Telegram should not be read")):
+                with redirect_stderr(err):
+                    rc = main([
+                        "digest", "--model", "synthetic:8b",
+                        "--vision-model", "qwen3-vl:4b",
+                    ])
+        self.assertEqual(rc, 1)
+        self.assertIn("'.[vision]'", err.getvalue())
+        self.assertIn("No Telegram history was read", err.getvalue())
+
     def test_ollama_http_error_displays_safe_diagnostic(self):
         from chatpulse.ollama_local import OllamaHTTPError
 
