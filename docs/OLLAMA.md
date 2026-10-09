@@ -34,12 +34,18 @@ The entire command reads **only the previously approved chat**, in
 the selected day's local window (by default 00:00 until invocation
 for today), pseudonymizes/redacts messages in
 memory, then sends *only those projections* to the local HTTP Ollama server.
-The digest is printed to the **local terminal**, never sent to Telegram or
-saved to a file. Terminal scrollback and a compromised local OS/user are
-outside ChatPulse's protection boundary.
+The digest is printed to the **local terminal** by default. Only an
+explicit `digest --send` delivers the generated (not raw) summary to the
+already approved Telegram group via the logged-in account; it cannot be
+used with `--sample-messages`. No background delivery or scheduled posts.
+Telegram, group members, terminal scrollback and compromised local OS/users
+are outside ChatPulse's local-inference protection boundary.
 
 A typical 700+ message conversation needs multiple local inference calls.
 The process shows chunk counts, without quoting chat messages or identities.
+A running note and recent message overlap are passed forward to preserve
+conversation context across technical chunks, and related stories are merged
+at the final stage. This is best effort, not a factual accuracy guarantee.
 Model processing can take substantial time on less powerful machines.
 
 ## Security boundaries
@@ -67,8 +73,10 @@ Model processing can take substantial time on less powerful machines.
   public network. If Ollama runs as another OS user or in a container,
   ChatPulse's local config check may not match the daemon's effective config
   and will require additional administrative verification.
-- No content logging, telemetry, model downloads, scheduled actions or
-  background sending is performed. Unit tests run entirely offline.
+- No content logging, telemetry, automatic model downloads, scheduled actions
+  or background sending. `--send` is a one-time explicit delivery that sends
+  the summarized digest to Telegram and cannot be undone. Unit tests run
+  entirely offline.
 
 ## About model choice
 
