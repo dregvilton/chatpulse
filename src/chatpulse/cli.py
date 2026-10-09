@@ -267,11 +267,18 @@ def _digest_history(*, day: date | None, model: str, tone: str,
             "will be described in RAM; GIFs and animations are labeled only.",
             flush=True,
         )
+    visual_descriptions = [0]
+
+    def vision_described() -> None:
+        visual_descriptions[0] += 1
+
     window, finished, messages = asyncio.run(
         read_selected_safe_history(
             open_system_vault(), day=day, from_time=from_time, to_time=to_time,
             vision_client=local if vision_model is not None else None,
             vision_model=vision_model, max_images=max_images,
+            sample_messages=sample_messages,
+            on_vision_described=vision_described,
             on_vision_warning=lambda reason: print(
                 f"Vision warning ({reason}): image description unavailable. "
                 "Continuing with text-only context for the remaining media.",
@@ -282,6 +289,12 @@ def _digest_history(*, day: date | None, model: str, tone: str,
     if not messages:
         print("No text messages found in the selected time window.")
         return
+    if vision_model is not None:
+        print(
+            f"Vision: {visual_descriptions[0]} image(s) successfully described "
+            "for this selection (no image content logged).",
+            flush=True,
+        )
     full_count = len(messages)
     if sample_messages is not None:
         messages = messages[-sample_messages:]
