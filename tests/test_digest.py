@@ -160,6 +160,49 @@ class DigestTests(unittest.TestCase):
         self.assertIn("без мата", model.calls[0]["system"])
         self.assertTrue(all(len(x["user"]) <= 24000 for x in model.calls))
 
+    def test_previous_chunk_context_is_passed_into_next_chunk(self):
+        class ThreadModel:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    return "История продолжается: обсуждают один и тот же фильм"
+                return "Продолжение той же темы, без выдуманного финала"
+
+        model = ThreadModel()
+        messages = [
+            safe("Participant 1", "14:00", "Первый спорный фильм. " * 35)
+            for _ in range(40)
+        ]
+        summarize_safe_messages(messages, model_client=model, model="test:8b")
+        self.assertGreater(len(model.calls), 2)
+        second = model.calls[1]["user"]
+        self.assertIn("ПРЕДЫДУЩИЙ КОНТЕКСТ", second)
+        self.assertIn("История продолжается:", second)
+        self.assertIn("ПОСЛЕДНИЕ РЕПЛИКИ", second)
+        self.assertIn("НОВЫЕ СООБЩЕНИЯ", second)
+        self.assertIn("не как отдельные", second)
+        final = model.calls[-1]["user"]
+        self.assertIn("границы заметок", final)
+        self.assertIn("одну цельную историю", final)
+        self.assertTrue(all(len(x["user"]) <= 24000 for x in model.calls))
+
+    def test_overlap_preserves_whole_rows(self):
+        from chatpulse.digest import overlap_rows, previous_digest_note
+        import json
+        source = "\n".join([
+            json.dumps({"author": "Participant 1", "text": f"r{i}"})
+            for i in range(10)
+        ])
+        recent = overlap_rows(source, max_chars=120)
+        self.assertTrue(recent)
+        self.assertTrue(all(json.loads(x) for x in recent.splitlines()))
+        self.assertIn("r9", recent)
+        self.assertLessEqual(len(recent), 120)
+        self.assertEqual(previous_digest_note("x" * 2000), "x" * 1600)
+
     def test_refuses_unbounded_digest(self):
         model = FakeModel()
         with self.assertRaises(DigestError):
