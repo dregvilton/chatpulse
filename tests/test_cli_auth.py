@@ -61,6 +61,20 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["select-chat"]), 1)
         self.assertIn("Operation failed", errors.getvalue())
 
+    def test_ollama_http_error_displays_safe_diagnostic(self):
+        from chatpulse.ollama_local import OllamaHTTPError
+
+        stderr = StringIO()
+        with patch("chatpulse.cli._digest_history",
+                   side_effect=OllamaHTTPError(status=500, route="/api/chat")):
+            with redirect_stderr(stderr):
+                self.assertEqual(main(["digest", "--model", "synthetic:8b"]), 1)
+        displayed = stderr.getvalue()
+        self.assertIn("HTTP 500", displayed)
+        self.assertIn("/api/chat", displayed)
+        self.assertIn("server.log", displayed)
+        self.assertNotIn("response body:", displayed)
+
     def test_digest_model_guard_happens_before_telegram(self):
         from chatpulse.ollama_local import LocalModelError
 
