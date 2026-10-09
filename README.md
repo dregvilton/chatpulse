@@ -110,6 +110,15 @@ chatpulse digest --model huihui_ai/qwen3-abliterated:8b \
 # Optional: --tone neutral
 ```
 
+For less-filtered text in friends' chats, experiment with a downloaded
+uncensored/abliterated model, such as
+`fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b`. First check
+`ollama run MODEL "Привет"` independently before a private chat digest.
+The default `friends` tone now preserves actual profanity and teasing
+without moralizing or inventing jokes. For one-chunk samples ChatPulse
+summarizes the redacted messages directly instead of losing details through
+two LLM passes. Model quality and factual accuracy must be reviewed.
+
 `--sample-messages 20..250` is a **quick test only**, not a full-day
 digest. It reads the chosen time window into memory, uses only its last
 N redacted messages for inference, clearly labels the output as partial,
