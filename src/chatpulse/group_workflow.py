@@ -17,7 +17,7 @@ from chatpulse.history import (
     DEFAULT_TIMEZONE, DigestWindow, collect_safe_history,
 )
 from chatpulse.privacy import redact_text
-from chatpulse.ollama_local import OllamaCompletionError, VisionDescriptionError
+from chatpulse.ollama_local import VisionDescriptionError
 from chatpulse.selection import (
     GroupChoice, SelectedChatHistoryClient, discover_groups,
 )
@@ -211,17 +211,13 @@ async def read_selected_safe_history(
                     vision_client.describe_image, model=vision_model, jpeg=jpeg
                 )
                 return prefix + ": " + redact_text(description)[:550] + "]"
-            except OllamaCompletionError as exc:
-                # A malformed or empty local vision description must not
-                # prevent text-only summarization. Skip further visual calls
-                # this run to avoid repeatedly loading a failing model.
+            except VisionDescriptionError as exc:
+                # Fail soft only for an already verified model's unusable
+                # vision *content*. Cloud/local verification and malformed
+                # transport responses must still fail closed.
                 vision_unavailable = True
-                reason = (
-                    exc.reason if isinstance(exc, VisionDescriptionError)
-                    else "unusable-response"
-                )
                 if on_vision_warning is not None:
-                    on_vision_warning(reason)  # Fixed code, never model text.
+                    on_vision_warning(exc.reason)  # Fixed code, never model text.
                 return prefix + ": описание недоступно, учтён только факт отправки]"
             except (ValueError, OSError):
                 return prefix + ": не удалось прочитать изображение]"
