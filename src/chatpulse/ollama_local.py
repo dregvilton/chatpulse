@@ -39,6 +39,19 @@ class OllamaCompletionError(LocalModelError):
     """Ollama responded but the expected result was not usable."""
 
 
+class VisionDescriptionError(OllamaCompletionError):
+    """A fixed, content-free reason why local vision output was unusable."""
+
+    def __init__(self, reason: str):
+        if reason not in (
+            "model-mismatch", "incomplete", "truncated", "empty-description",
+            "oversized-description",
+        ):
+            raise ValueError("Unknown local vision failure reason")
+        super().__init__("Local visual description unavailable")
+        self.reason = reason
+
+
 MAX_JSON_RESPONSE = 2 * 1024 * 1024
 _MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
 
@@ -194,15 +207,21 @@ class OllamaLocal:
             "options": {
                 "temperature": 0.1,
                 "num_ctx": 4096,
-                "num_predict": 125,
+                "num_predict": 384,
             },
         })
-        if response.get("model") != model or response.get("done") is not True:
-            raise OllamaCompletionError("Visual model or completion mismatch")
+        if response.get("model") != model:
+            raise VisionDescriptionError("model-mismatch")
+        if response.get("done") is not True:
+            raise VisionDescriptionError("incomplete")
+        if response.get("done_reason") == "length":
+            raise VisionDescriptionError("truncated")
         answer = response.get("message")
         result = answer.get("content") if isinstance(answer, dict) else None
-        if not isinstance(result, str) or not result.strip() or len(result) > 700:
-            raise OllamaCompletionError("Invalid local image description")
+        if not isinstance(result, str) or not result.strip():
+            raise VisionDescriptionError("empty-description")
+        if len(result) > 700:
+            raise VisionDescriptionError("oversized-description")
         return result.strip()
 
     def chat(
