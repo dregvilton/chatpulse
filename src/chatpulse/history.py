@@ -86,11 +86,25 @@ async def collect_history(client: HistoryClient, *, chat_id: int,
             raise ValueError("Message limit exceeded; refusing partial digest")
         message_id = getattr(item, "id", None)
         reply_id = getattr(item, "reply_to_msg_id", None)
+        # Telethon may have a sender entity already cached with each message.
+        # Read it in memory only: do NOT request contacts or fetch senders.
+        sender = getattr(item, "sender", None)
+        first = getattr(sender, "first_name", None)
+        last = getattr(sender, "last_name", None)
+        handle = getattr(sender, "username", None)
+        name_candidates = [first, last, handle]
+        if isinstance(first, str) and isinstance(last, str):
+            name_candidates.append(f"{first} {last}")
+        aliases = tuple(
+            name.strip() for name in name_candidates
+            if isinstance(name, str) and 2 <= len(name.strip()) <= 80
+        )
         output.append(RawMessage(
             sender_id=getattr(item, "sender_id", None),
             sender_name=None, sent_at=when, text=caption,
             message_id=message_id if type(message_id) is int else None,
             reply_to_id=reply_id if type(reply_id) is int else None,
+            sender_aliases=aliases,
         ))
     output.reverse()
     return output
