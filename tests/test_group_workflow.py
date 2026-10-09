@@ -10,6 +10,7 @@ from telethon.tl.types import InputPeerChannel, InputPeerChat
 from chatpulse.credentials import CredentialVault, SecureStorageError, TelegramCredentials
 from chatpulse.group_workflow import (
     approve_group, resolve_window, preview_selected_group,
+    read_selected_safe_history, image_kind,
 )
 from chatpulse.selection import SelectedChat
 from tests.fakes import FakeKeyring
@@ -48,6 +49,12 @@ class FakeClient:
         for message in self.messages:
             yield message
 
+    async def download_media(self, message, file=None, **kwargs):
+        self.events.append("download")
+        if file is not bytes:
+            raise AssertionError("Media must download into memory")
+        return b"synthetic image, no personal information"
+
 
 def fake_msg(hour, content, sender):
     return SimpleNamespace(
@@ -68,6 +75,83 @@ class GroupWorkflowTests(unittest.TestCase):
         self.assertEqual((api_id, api_hash), (123, "a" * 32))
         self.assertEqual(session, "1" + "Q" * 100)
         return self.client
+
+    def test_media_classification_is_strict(self):
+        jpeg = SimpleNamespace(photo=object(), sticker=None, gif=None, file=None)
+        sticker = SimpleNamespace(photo=None, sticker=object(), gif=None,
+                                  file=SimpleNamespace(mime_type="image/webp"))
+        animated = SimpleNamespace(photo=None, sticker=object(), gif=None,
+                                   file=SimpleNamespace(mime_type="application/x-tgsticker"))
+        self.assertEqual(image_kind(jpeg), "фото")
+        self.assertEqual(image_kind(sticker), "стикер")
+        self.assertEqual(image_kind(animated), "анимированный стикер")
+        self.assertIsNone(image_kind(SimpleNamespace()))
+
+    def test_opt_in_photo_is_described_locally_and_links_replies(self):
+        from unittest.mock import Mock
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        photo = fake_msg(12, "", 3)
+        photo.id = 5501
+        photo.reply_to_msg_id = None
+        photo.photo = object()
+        photo.file = SimpleNamespace(size=300, mime_type="image/jpeg")
+        response = fake_msg(12, "Ахаха, норм картинка", 4)
+        response.id = 5502
+        response.reply_to_msg_id = 5501
+        self.client.messages = [response, photo]  # newest first
+        vision = Mock()
+        vision.describe_image.return_value = "Мем про рыжего кота и компьютер"
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            _, _, result = asyncio.run(read_selected_safe_history(
+                self.vault, client_factory=self.factory,
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                vision_client=vision, vision_model="qwen3-vl:4b",
+            ))
+        self.assertEqual(len(result), 2)
+        self.assertIn("[фото: Мем про рыжего кота", result[0].text)
+        self.assertEqual(result[1].reply_to_turn, "m1")
+        self.assertEqual(vision.ensure_local.call_count, 1)
+        self.assertEqual(vision.describe_image.call_count, 1)
+        self.assertIn("download", self.client.events)
+
+    def test_media_is_never_downloaded_without_opt_in(self):
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        pic = fake_msg(12, "", 3)
+        pic.photo = object()
+        pic.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        self.client.messages = [pic, fake_msg(11, "Текст", 4)]
+        _, _, safe = asyncio.run(read_selected_safe_history(
+            self.vault, client_factory=self.factory,
+            now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+        ))
+        self.assertEqual([x.text for x in safe], ["Текст"])
+        self.assertNotIn("download", self.client.events)
+
+    def test_visual_budget_does_not_download_excess_images(self):
+        from unittest.mock import Mock
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        photos = []
+        for i in range(3):
+            pic = fake_msg(12, "", i + 1)
+            pic.photo = object()
+            pic.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+            photos.append(pic)
+        self.client.messages = photos
+        vision = Mock()
+        vision.describe_image.return_value = "На фото кот"
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            _, _, safe = asyncio.run(read_selected_safe_history(
+                self.vault, client_factory=self.factory,
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                vision_client=vision, vision_model="qwen3-vl:4b",
+                max_images=1,
+            ))
+        self.assertEqual(len(safe), 3)
+        self.assertEqual(self.client.events.count("download"), 1)
+        self.assertEqual(vision.describe_image.call_count, 1)
+        self.assertEqual(sum("лимит" in x.text for x in safe), 2)
 
     def test_no_consent_performs_no_telegram_calls(self):
         async def fail_select(limit):
