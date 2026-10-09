@@ -208,7 +208,8 @@ def _digest_history(*, day: date | None, model: str, tone: str,
                     to_time: clock_time | None = None,
                     sample_messages: int | None = None,
                     send: bool = False, vision_model: str | None = None,
-                    max_images: int = 4) -> None:
+                    max_images: int = 4,
+                    review_send: bool = False) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.digest import summarize_safe_messages
     from chatpulse.group_workflow import read_selected_safe_history
@@ -217,8 +218,12 @@ def _digest_history(*, day: date | None, model: str, tone: str,
     # Reject invalid sampling arguments before network reads or model inference.
     if sample_messages is not None and not 20 <= sample_messages <= 250:
         raise ValueError("Sample size must be between 20 and 250 messages")
-    if send and sample_messages is not None:
-        raise ValueError("Cannot send a partial sample to the Telegram group")
+    if (send or review_send) and sample_messages is not None:
+        raise ValueError("Cannot publish a partial sample to the Telegram group")
+    if send and review_send:
+        raise ValueError("Use either --send or --review-send, not both")
+    if review_send:
+        _interactive_only()
 
     # Privacy gate before the first chat-history request. No Telegram content
     # is retrieved unless local model/configuration checks are successful.
@@ -290,13 +295,32 @@ def _digest_history(*, day: date | None, model: str, tone: str,
         print("(TEST SAMPLE ONLY: not representative of the entire day.)")
     if send:
         print("(Local inference complete. Telegram publication was requested.)\n")
+    elif review_send:
+        print("(Review before publication. Nothing has been sent yet.)\n")
     else:
         print("(Local preview only. No Telegram messages sent.)\n")
     print(digest.text)
-    if send:
+    should_send = send
+    if review_send:
+        # No persisted draft, no second LLM call, no accidental publication.
+        # The exact summary just shown is what Telegram will receive,
+        # wrapped in the same HTML header as normal --send.
         post = _format_group_post(
             digest=digest.text, window=window, message_count=len(messages)
         )
+        print(
+            "\nPublish this digest to the previously approved Telegram group? "
+            "This action cannot be undone.",
+            flush=True,
+        )
+        should_send = input("Type SEND to publish, or Enter to cancel: ").strip() == "SEND"
+        if not should_send:
+            print("Not published. No Telegram message was sent.")
+    if should_send:
+        if not review_send:
+            post = _format_group_post(
+                digest=digest.text, window=window, message_count=len(messages)
+            )
         print("Publishing formatted digest to the approved group...", flush=True)
         asyncio.run(_send_group_post(open_system_vault(), post))
         print("Digest was published to the approved Telegram group.")
@@ -356,6 +380,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     digest_parser.add_argument("--send", action="store_true",
                                help="Explicitly post the finished full digest to the approved group")
     digest_parser.add_argument(
+        "--review-send", action="store_true",
+        help="Display a full digest; publish once only after typing SEND (no disk draft)",
+    )
+    digest_parser.add_argument(
         "--vision-model", default=None,
         help="OPT-IN: a downloaded local vision model (e.g. qwen3-vl:4b)",
     )
@@ -399,6 +427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from_time=args.from_time, to_time=args.to_time,
                 sample_messages=args.sample_messages, send=args.send,
                 vision_model=args.vision_model, max_images=args.max_images,
+                review_send=args.review_send,
             )
         elif args.command == "rate":
             from chatpulse.ratings import rate_last
