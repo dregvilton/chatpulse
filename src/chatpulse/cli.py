@@ -10,7 +10,9 @@ import time
 from typing import Sequence
 
 from chatpulse.privacy import RawMessage, sanitize_messages, validate_ollama_url
-from chatpulse.ollama_local import LocalModelError
+from chatpulse.ollama_local import (
+    LocalModelError, OllamaHTTPError, OllamaConnectionError, OllamaCompletionError,
+)
 from chatpulse.digest import DigestError
 
 
@@ -288,12 +290,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.", file=sys.stderr)
         return 130
-    except LocalModelError:
+    except LocalModelError as exc:
+        # Never print arbitrary exception text, response bodies, prompts,
+        # message content, or model names. Only fixed diagnostics and status.
+        if isinstance(exc, OllamaHTTPError):
+            print(
+                f"Ollama local API returned HTTP {exc.status} for {exc.route}. "
+                "Check ~/.ollama/logs/server.log for model loading or memory "
+                "errors. The server response body was suppressed.",
+                file=sys.stderr,
+            )
+        elif isinstance(exc, OllamaConnectionError):
+            print(
+                "Ollama local connection failed. Check if the server and "
+                "model runner are still running (ollama ps).",
+                file=sys.stderr,
+            )
+        elif isinstance(exc, OllamaCompletionError):
+            print(
+                "Ollama local generation returned an unusable response "
+                "(model mismatch, incomplete reply, oversized output or "
+                "invalid JSON). Check the local Ollama server log.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Local model/configuration verification failed. Check "
+                "~/.ollama/server.json, restart Ollama and run "
+                "chatpulse local-models.",
+                file=sys.stderr,
+            )
         print(
-            "Local Ollama verification failed. Check that cloud features "
-            "are disabled in ~/.ollama/server.json, restart Ollama, "
-            "and run chatpulse local-models. No chat content was sent "
-            "unless generation had already started.",
+            "No Telegram content was sent outside the local Ollama process "
+            "by ChatPulse. If generation began, some redacted chat content "
+            "may already have reached the local model.",
             file=sys.stderr,
         )
         return 1
