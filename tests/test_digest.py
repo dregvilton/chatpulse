@@ -58,7 +58,7 @@ class DigestTests(unittest.TestCase):
             model_client=model, model="llama3.1:latest",
         )
         first, final = model.calls
-        self.assertIn("конкретные утверждения", first["user"])
+        self.assertIn("конкретное утверждение", first["user"])
         self.assertIn("Обычные подколы", first["user"])
         self.assertIn("Момент дня", final["user"])
         self.assertIn("кто кого оскорбил", final["user"])
