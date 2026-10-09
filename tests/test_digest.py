@@ -334,6 +334,80 @@ class DigestTests(unittest.TestCase):
         self.assertLessEqual(len(recent), 120)
         self.assertEqual(previous_digest_note("x" * 2000), "x" * 1600)
 
+
+    def test_cross_chunk_reply_includes_original_bounded_anchor(self):
+        import json
+        from chatpulse.digest import reply_anchor_rows
+
+        messages = [SafeMessage(
+            "Participant 1", "12:00",
+            "Зачем покупать игру без кооператива?", turn="m1",
+        )]
+        messages += [
+            SafeMessage("Participant 2", "12:01", "Просто флуд " * 90,
+                        turn=f"m{i}") for i in range(2, 23)
+        ]
+        messages.append(SafeMessage(
+            "Participant 3", "12:15", "Да, играть вместе будет неудобно",
+            turn="m23", reply_to_turn="m1",
+        ))
+        model = FakeModel()
+        result = summarize_safe_messages(messages, model_client=model, model="test:8b")
+        self.assertGreater(result.chunks, 1)
+        prompts = [call["user"] for call in model.calls[:-1]]
+        matching = [p for p in prompts if '"reply_to":"m1"' in p]
+        self.assertTrue(matching)
+        self.assertTrue(any(
+            "РАННИЕ РЕПЛИКИ" in p and
+            "Зачем покупать игру без кооператива?" in p
+            for p in matching
+        ))
+        self.assertTrue(any("НЕ новые факты" in p for p in matching))
+        preceding = "\n".join(message_rows(messages[:22]))
+        current = "\n".join(message_rows(messages[22:]))
+        anchor = reply_anchor_rows(current, [preceding], max_chars=300)
+        self.assertLessEqual(len(anchor), 300)
+        parsed = [json.loads(line) for line in anchor.splitlines()]
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["turn"], "m1")
+        self.assertEqual(parsed[0]["author"], "Participant 1")
+
+    def test_reply_anchors_deduplicate_and_skip_unresolved_targets(self):
+        from chatpulse.digest import reply_anchor_rows
+        previous = "\n".join(message_rows([
+            SafeMessage("Participant 1", "12:00", "Первое сообщение", turn="m1"),
+        ]))
+        current = "\n".join(message_rows([
+            SafeMessage("Participant 2", "12:01", "Ответ", turn="m2",
+                        reply_to_turn="m1"),
+            SafeMessage("Participant 3", "12:02", "Ещё ответ", turn="m3",
+                        reply_to_turn="m1"),
+            SafeMessage("Participant 4", "12:03", "Ответ на отсутствующее",
+                        turn="m4", reply_to_turn="m999"),
+        ]))
+        anchors = reply_anchor_rows(current, [previous])
+        self.assertEqual(len(anchors.splitlines()), 1)
+        self.assertIn("Первое сообщение", anchors)
+        self.assertEqual(reply_anchor_rows(previous, [previous]), "")
+
+    def test_final_unverified_quotes_are_excluded(self):
+        class Model:
+            def chat(self, **kwargs):
+                return ("• Обсудили «Настоящая фраза» и посмеялись.\n"
+                        "• Приписали участнику «Этого никто не говорил».")
+
+        result = summarize_safe_messages(
+            [safe("Participant 1", "13:00", "Настоящая фраза")],
+            model_client=Model(), model="test:8b",
+        )
+        self.assertIn("Настоящая фраза", result.text)
+        self.assertNotIn("Этого никто не говорил", result.text)
+        with self.assertRaisesRegex(DigestError, "quote validation"):
+            summarize_safe_messages(
+                [safe("Participant 1", "13:00", "Другая фраза")],
+                model_client=Model(), model="test:8b",
+            )
+
     def test_refuses_unbounded_digest(self):
         model = FakeModel()
         with self.assertRaises(DigestError):
