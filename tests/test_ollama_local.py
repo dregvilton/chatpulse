@@ -118,6 +118,39 @@ class OllamaTests(unittest.TestCase):
         self.assertNotIn("Authorization", headers)
         self.assertEqual(headers["Connection"], "close")
 
+    def test_local_vision_sends_only_bounded_base64_image(self):
+        import base64
+        fake_jpeg = b"\xff\xd8" + b"safe-synthetic-pixels" * 8
+        FakeHttpConnection.responses = [
+            FakeResponse(tags("qwen3-vl:4b")),
+            FakeResponse({"details": {"format": "gguf"}}),
+            FakeResponse({"model": "qwen3-vl:4b", "done": True,
+                          "message": {"content": "Мем с котиком"}}),
+        ]
+        with patch("chatpulse.ollama_local.http.client.HTTPConnection",
+                   FakeHttpConnection):
+            result = self.gateway().describe_image(
+                model="qwen3-vl:4b", jpeg=fake_jpeg,
+            )
+        self.assertEqual(result, "Мем с котиком")
+        route, request = FakeHttpConnection.created[-1].requests[0][1:3]
+        self.assertEqual(route, "/api/chat")
+        body = json.loads(request)
+        self.assertEqual(body["messages"][0]["images"],
+                         [base64.b64encode(fake_jpeg).decode("ascii")])
+        self.assertFalse(body["stream"])
+        self.assertNotIn("http", body["messages"][0]["content"])
+        self.assertNotIn("PRIVATE CHAT", str(body))
+
+    def test_vision_does_not_send_oversized_payload(self):
+        gateway = self.gateway()
+        with patch.object(gateway, "ensure_local", return_value=True):
+            with patch.object(gateway, "_json",
+                              side_effect=AssertionError("Must not send")):
+                with self.assertRaises(LocalModelError):
+                    gateway.describe_image(model="qwen3-vl:4b",
+                                           jpeg=b"a" * 900_001)
+
     def test_http_redirect_never_followed(self):
         FakeHttpConnection.responses = [FakeResponse({}, status=302)]
         with patch("chatpulse.ollama_local.http.client.HTTPConnection",
