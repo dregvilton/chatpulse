@@ -254,7 +254,10 @@ def _digest_history(*, day: date | None, model: str, tone: str,
         print("(Snapshot: new messages may arrive after this run.)")
     if sample_messages is not None:
         print("(TEST SAMPLE ONLY: not representative of the entire day.)")
-    print("(Local summary. No Telegram messages sent or files written.)\n")
+    if send:
+        print("(Local inference complete. Telegram publication was requested.)\n")
+    else:
+        print("(Local preview only. No Telegram messages sent or files written.)\n")
     print(digest.text)
     if send:
         post = _format_group_post(
