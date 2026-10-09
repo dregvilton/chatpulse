@@ -14,6 +14,7 @@ from typing import Sequence
 from chatpulse.privacy import RawMessage, sanitize_messages, validate_ollama_url, redact_text
 from chatpulse.ollama_local import (
     LocalModelError, OllamaHTTPError, OllamaConnectionError, OllamaCompletionError,
+    VisionDescriptionError,
 )
 from chatpulse.digest import DigestError
 from chatpulse.ratings import RatingError
@@ -155,6 +156,29 @@ def _local_models() -> None:
         print(f"  {item.name} ({item.disk_bytes // (1024**2)} MiB on disk)")
 
 
+def _vision_check(model: str) -> None:
+    """Local-only test against a synthetic image; never open Telegram."""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        raise VisionSetupError from None
+    from io import BytesIO
+    from chatpulse.ollama_local import OllamaLocal
+
+    synthetic = Image.new("RGB", (256, 256), "white")
+    draw = ImageDraw.Draw(synthetic)
+    draw.rectangle((35, 35, 220, 220), fill="royalblue")
+    draw.ellipse((95, 95, 165, 165), fill="yellow")
+    buffer = BytesIO()
+    synthetic.save(buffer, format="JPEG", quality=80)
+    print("Testing local vision with a generated geometric image (no Telegram access)...",
+          flush=True)
+    description = OllamaLocal().describe_image(model=model, jpeg=buffer.getvalue())
+    # This output describes only a synthetic geometric image.
+    print("Local visual description received:", redact_text(description))
+    print("Vision preflight passed. This does not verify real-chat image accuracy.")
+
+
 def _format_group_post(*, digest: str, window, message_count: int) -> str:
     """Escape model text before applying a small, controlled Telegram HTML skin."""
     body = escape(redact_text(digest.strip()))
@@ -248,6 +272,11 @@ def _digest_history(*, day: date | None, model: str, tone: str,
             open_system_vault(), day=day, from_time=from_time, to_time=to_time,
             vision_client=local if vision_model is not None else None,
             vision_model=vision_model, max_images=max_images,
+            on_vision_warning=lambda reason: print(
+                f"Vision warning ({reason}): image description unavailable. "
+                "Continuing with text-only context for the remaining media.",
+                flush=True,
+            ),
         )
     )
     if not messages:
@@ -364,6 +393,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     preview_parser.add_argument("--to-time", type=clock_time.fromisoformat, default=None,
                                 help="Local HH:MM cutoff (default now today, 24:00 past days)")
     sub.add_parser("local-models", help="List eligible local Ollama models; no Telegram reads")
+    vision_check_parser = sub.add_parser(
+        "vision-check", help="Test a local vision model on a synthetic picture; no Telegram"
+    )
+    vision_check_parser.add_argument("--model", default="qwen3-vl:4b-instruct")
     digest_parser = sub.add_parser("digest", help="Generate a local-only group digest")
     digest_parser.add_argument("--model", required=True, help="Downloaded Ollama model")
     digest_parser.add_argument("--date", type=date.fromisoformat, default=None,
@@ -385,7 +418,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     digest_parser.add_argument(
         "--vision-model", default=None,
-        help="OPT-IN: a downloaded local vision model (e.g. qwen3-vl:4b)",
+        help="OPT-IN: a downloaded local vision model (prefer qwen3-vl:4b-instruct)",
     )
     digest_parser.add_argument(
         "--max-images", type=int, choices=range(1, 9), metavar="{1..8}",
@@ -421,6 +454,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             _preview_history(args.date, args.from_time, args.to_time)
         elif args.command == "local-models":
             _local_models()
+        elif args.command == "vision-check":
+            _vision_check(args.model)
         elif args.command == "digest":
             _digest_history(
                 day=args.date, model=args.model, tone=args.tone,
@@ -449,6 +484,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "Optional local image processing is not installed. Run: "
             "python -m pip install -e '.[vision]' (then retry). "
             "No Telegram history was read.",
+            file=sys.stderr,
+        )
+        return 1
+    except VisionDescriptionError as exc:
+        print(
+            f"Local vision test returned no usable image description "
+            f"(reason: {exc.reason}). Try qwen3-vl:4b-instruct and "
+            "check your Ollama version; no Telegram data was involved "
+            "in vision-check.",
             file=sys.stderr,
         )
         return 1
