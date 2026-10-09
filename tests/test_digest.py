@@ -138,6 +138,41 @@ class DigestTests(unittest.TestCase):
         self.assertIn("Жёсткий подкол про радугу", model.calls[0]["user"])
         self.assertEqual(model.calls[0]["num_predict"], 420)
 
+    def test_substantial_single_chunk_uses_verified_evidence_and_raw_chat(self):
+        class Model:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    return (
+                        "Participant 1: «Смешная оригинальная фраза». "
+                        "Выдумка «Никто такого не говорил»."
+                    )
+                return "• Все обсуждали исходную фразу"
+
+        model = Model()
+        messages = [
+            SafeMessage(
+                "Participant 1", "14:35", "Смешная оригинальная фраза",
+                turn=f"m{i}"
+            )
+            for i in range(35)
+        ]
+        result = summarize_safe_messages(
+            messages, model_client=model, model="test:8b",
+        )
+        self.assertEqual(result.chunks, 1)
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn("НЕ финальный дайджест", model.calls[0]["user"])
+        final_prompt = model.calls[1]["user"]
+        self.assertIn("ПРЕДВАРИТЕЛЬНЫЕ ЗАМЕТКИ", final_prompt)
+        self.assertIn("«Смешная оригинальная фраза»", final_prompt)
+        self.assertNotIn("Никто такого не говорил", final_prompt)
+        self.assertIn("[нет точной цитаты", final_prompt)
+        self.assertIn('"turn":"m0"', final_prompt)
+
     def test_short_neutral_digest_does_not_request_rough_tone(self):
         model = FakeModel()
         summarize_safe_messages(
