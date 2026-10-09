@@ -101,11 +101,11 @@ restarted; merely connecting to `localhost` is *not* enough.
 ```sh
 # After configuring ~/.ollama/server.json and pulling a local model yourself:
 chatpulse local-models
-chatpulse digest --model huihui_ai/qwen3-abliterated:8b
-chatpulse digest --model huihui_ai/qwen3-abliterated:8b --date 2026-10-08 \
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b --date 2026-10-08 \
   --from-time 07:00 --to-time 19:30
 # For faster model comparisons, summarize only the last 100 messages:
-chatpulse digest --model huihui_ai/qwen3-abliterated:8b \
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
   --date 2026-10-08 --sample-messages 100
 # Optional: --tone neutral
 ```
@@ -164,7 +164,7 @@ is saved for training. `chatpulse rate` requires no network connection.
 ```sh
 ollama list
 ollama rm llama3.1:latest
-ollama rm huihui_ai/qwen3-abliterated:8b
+ollama rm fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
 ollama rm dolphin3:8b
 ollama rm CognitiveComputations/dolphin-mistral-nemo:12b-v2.9.3-Q4_K_M
 ```
