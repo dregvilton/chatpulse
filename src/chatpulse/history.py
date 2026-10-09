@@ -39,13 +39,19 @@ async def collect_history(client: HistoryClient, *, chat_id: int,
                           allowed_chat_ids: frozenset[int], window: DigestWindow,
                           max_messages: int = 5000,
                           media_describer: Callable[[Any], Awaitable[str | None]] | None = None,
+                          media_sample_limit: int | None = None,
                           ) -> list[RawMessage]:
     """A selected-group-only read; media is opt-in and RAM-only via caller."""
     if type(chat_id) is not int or chat_id not in allowed_chat_ids:
         raise PermissionError("Chat is not allowlisted")
     if not 1 <= max_messages <= 10000:
         raise ValueError("Invalid max_messages")
+    if media_sample_limit is not None and not 20 <= media_sample_limit <= 250:
+        raise ValueError("Invalid media sample limit")
     output: list[RawMessage] = []
+    # Telegram iterates newest-first. Visual work is only needed for
+    # messages that can appear in the eventual last-N preview.
+    newest_eligible = 0
     # Also cap non-text/service/media entries, not just collected text.
     scanned = 0
     scan_limit = min(20000, max_messages * 3)
@@ -67,12 +73,15 @@ async def collect_history(client: HistoryClient, *, chat_id: int,
             continue
         # Caller opts in to reading only supported image attachments.
         # Never download media from a non-approved Telegram group.
-        if media_describer is not None:
+        if media_describer is not None and (
+            media_sample_limit is None or newest_eligible < media_sample_limit
+        ):
             note = await media_describer(item)
             if note:
                 caption = f"{caption}\n{note}".strip() if caption else note
         if not caption:
             continue
+        newest_eligible += 1
         if len(output) >= max_messages:
             raise ValueError("Message limit exceeded; refusing partial digest")
         message_id = getattr(item, "id", None)
@@ -91,9 +100,11 @@ async def collect_safe_history(client: HistoryClient, *, chat_id: int,
                                timezone_name: str = DEFAULT_TIMEZONE,
                                max_messages: int = 5000,
                                media_describer: Callable[[Any], Awaitable[str | None]] | None = None,
+                               media_sample_limit: int | None = None,
                                ) -> list[SafeMessage]:
     raw = await collect_history(
         client, chat_id=chat_id, allowed_chat_ids=allowed_chat_ids,
         window=window, max_messages=max_messages, media_describer=media_describer,
+        media_sample_limit=media_sample_limit,
     )
     return sanitize_messages(raw, timezone=timezone_name)
