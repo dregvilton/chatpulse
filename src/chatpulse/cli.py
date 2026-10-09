@@ -16,6 +16,7 @@ from chatpulse.ollama_local import (
     LocalModelError, OllamaHTTPError, OllamaConnectionError, OllamaCompletionError,
 )
 from chatpulse.digest import DigestError
+from chatpulse.ratings import RatingError
 
 
 class VisionSetupError(RuntimeError):
@@ -265,8 +266,21 @@ def _digest_history(*, day: date | None, model: str, tone: str,
             f"(elapsed {int(time.monotonic() - started)} s)", flush=True
         ),
     )
-    print(f"  Total generation: {int(time.monotonic() - started)} s, "
+    generation_seconds = int(time.monotonic() - started)
+    print(f"  Total generation: {generation_seconds} s, "
           f"{digest.chunks} chunks", flush=True)
+    # Only rating metadata is persisted: no messages, media or digest text.
+    from chatpulse.ratings import RatingError, record_digest
+    feedback_ready = False
+    try:
+        record_digest(
+            model=model, count=digest.messages, chunks=digest.chunks,
+            seconds=generation_seconds, has_vision=vision_model is not None,
+            sample=sample_messages is not None,
+        )
+        feedback_ready = True
+    except RatingError:
+        print("Quality feedback could not be stored locally.", file=sys.stderr)
     cutoff = window.end.strftime("%H:%M") if window.start.date() == window.end.date() else "24:00"
     print(f"\nChatPulse digest — {window.start.date().isoformat()} "
           f"({window.start.strftime('%H:%M')}–{cutoff}, Asia/Yekaterinburg)")
@@ -277,7 +291,7 @@ def _digest_history(*, day: date | None, model: str, tone: str,
     if send:
         print("(Local inference complete. Telegram publication was requested.)\n")
     else:
-        print("(Local preview only. No Telegram messages sent or files written.)\n")
+        print("(Local preview only. No Telegram messages sent.)\n")
     print(digest.text)
     if send:
         post = _format_group_post(
@@ -286,6 +300,9 @@ def _digest_history(*, day: date | None, model: str, tone: str,
         print("Publishing formatted digest to the approved group...", flush=True)
         asyncio.run(_send_group_post(open_system_vault(), post))
         print("Digest was published to the approved Telegram group.")
+    if feedback_ready:
+        print("Rate the last digest: chatpulse rate 1..5 (5 = excellent).")
+
 
 def _logout() -> None:
     from chatpulse.credentials import open_system_vault
@@ -346,6 +363,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--max-images", type=int, choices=range(1, 9), metavar="{1..8}",
         default=4, help="Max photo/static-sticker descriptions (default 4)",
     )
+    rate_parser = sub.add_parser(
+        "rate", help="Rate latest digest 1-5 (local metadata only)"
+    )
+    rate_parser.add_argument("score", type=int, choices=range(1, 6))
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
     try:
@@ -379,11 +400,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sample_messages=args.sample_messages, send=args.send,
                 vision_model=args.vision_model, max_images=args.max_images,
             )
+        elif args.command == "rate":
+            from chatpulse.ratings import rate_last
+            rate_last(args.score)
+            print("Digest rating saved locally. No message text or media stored.")
         elif args.command == "logout":
             _logout()
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.", file=sys.stderr)
         return 130
+    except RatingError:
+        print(
+            "Rating failed: no recent digest, already rated, or local ratings unavailable.",
+            file=sys.stderr,
+        )
+        return 1
     except VisionSetupError:
         print(
             "Optional local image processing is not installed. Run: "
