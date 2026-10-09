@@ -16,7 +16,7 @@ from chatpulse.ollama_local import (
     LocalModelError, OllamaHTTPError, OllamaConnectionError, OllamaCompletionError,
     VisionDescriptionError,
 )
-from chatpulse.digest import DigestError
+from chatpulse.digest import DigestError, DigestQuoteValidationError
 from chatpulse.ratings import RatingError
 
 
@@ -543,6 +543,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "No Telegram content was sent outside the local Ollama process "
             "by ChatPulse. If generation began, some redacted chat content "
             "may already have reached the local model.",
+            file=sys.stderr,
+        )
+        return 1
+    except DigestQuoteValidationError:
+        print(
+            "Digest aborted: all generated stories contained unverified "
+            "verbatim quotations, including after one local retry. "
+            "No summary was saved or sent to Telegram.",
             file=sys.stderr,
         )
         return 1

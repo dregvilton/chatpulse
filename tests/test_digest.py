@@ -408,6 +408,60 @@ class DigestTests(unittest.TestCase):
                 model_client=Model(), model="test:8b",
             )
 
+
+    def test_all_invented_quotes_trigger_one_safe_retry(self):
+        class RetryModel:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    return "• Якобы сказали «Этого никто не говорил»."
+                return "• Обсудили пропавшую посылку без выдуманных реплик."
+
+        model = RetryModel()
+        counts = []
+        result = summarize_safe_messages(
+            [safe("Participant 1", "12:00", "Пропала посылка")],
+            model_client=model, model="test:8b",
+            on_progress=lambda i, total: counts.append((i, total)),
+        )
+        self.assertEqual(len(model.calls), 2)
+        self.assertIn("ПРЕДЫДУЩИЙ ОТВЕТ НЕ ПРОШЁЛ ПРОВЕРКУ",
+                      model.calls[1]["user"])
+        self.assertIn("Пропала посылка", model.calls[1]["user"])
+        self.assertIn("Обсудили пропавшую посылку", result.text)
+        self.assertEqual(counts, [(1, 1)])
+
+    def test_failed_retry_never_reports_successful_chunk(self):
+        class HallucinatingModel:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, **kwargs):
+                self.calls += 1
+                return "• Все решили «Несуществующая фраза»."
+
+        model = HallucinatingModel()
+        progress = []
+        with self.assertRaisesRegex(DigestError, "quote validation"):
+            summarize_safe_messages(
+                [safe("Participant 1", "12:00", "Проверенная тема")],
+                model_client=model, model="test:8b",
+                on_progress=lambda i, total: progress.append((i, total)),
+            )
+        self.assertEqual(model.calls, 2)
+        self.assertEqual(progress, [])
+
+    def test_invalid_quoted_bullets_cannot_leave_header_as_success(self):
+        from chatpulse.digest import finalize_digest
+        with self.assertRaisesRegex(DigestError, "quote validation"):
+            finalize_digest(
+                "Новости дня:\n• Непроверенное «всё подтвердилось».",
+                [safe("Participant 1", "12:00", "Другая тема")],
+            )
+
     def test_refuses_unbounded_digest(self):
         model = FakeModel()
         with self.assertRaises(DigestError):
