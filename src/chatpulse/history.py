@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, AsyncIterator, Awaitable, Callable, Protocol
 from zoneinfo import ZoneInfo
 from chatpulse.privacy import RawMessage, SafeMessage, sanitize_messages
 
@@ -37,8 +37,10 @@ class HistoryClient(Protocol):
 
 async def collect_history(client: HistoryClient, *, chat_id: int,
                           allowed_chat_ids: frozenset[int], window: DigestWindow,
-                          max_messages: int = 5000) -> list[RawMessage]:
-    """Caller supplies an authenticated client. No chat discovery or media downloads."""
+                          max_messages: int = 5000,
+                          media_describer: Callable[[Any], Awaitable[str | None]] | None = None,
+                          ) -> list[RawMessage]:
+    """A selected-group-only read; media is opt-in and RAM-only via caller."""
     if type(chat_id) is not int or chat_id not in allowed_chat_ids:
         raise PermissionError("Chat is not allowlisted")
     if not 1 <= max_messages <= 10000:
@@ -59,22 +61,39 @@ async def collect_history(client: HistoryClient, *, chat_id: int,
         if not window.contains(when):
             continue
         text = getattr(item, "message", None)
-        if not isinstance(text, str) or not text.strip():
+        caption = text.strip() if isinstance(text, str) else ""
+        # Don't recursively summarize earlier ChatPulse posts.
+        if caption.startswith("⚡ CHATPULSE · ДАЙДЖЕСТ ⚡"):
             continue
-        # Don't summarize earlier ChatPulse posts as if they were chat replies.
-        if text.startswith("⚡ CHATPULSE · ДАЙДЖЕСТ ⚡"):
+        # Caller opts in to reading only supported image attachments.
+        # Never download media from a non-approved Telegram group.
+        if media_describer is not None:
+            note = await media_describer(item)
+            if note:
+                caption = f"{caption}\n{note}".strip() if caption else note
+        if not caption:
             continue
         if len(output) >= max_messages:
             raise ValueError("Message limit exceeded; refusing partial digest")
-        output.append(RawMessage(sender_id=getattr(item, "sender_id", None),
-                                 sender_name=None, sent_at=when, text=text))
+        message_id = getattr(item, "id", None)
+        reply_id = getattr(item, "reply_to_msg_id", None)
+        output.append(RawMessage(
+            sender_id=getattr(item, "sender_id", None),
+            sender_name=None, sent_at=when, text=caption,
+            message_id=message_id if type(message_id) is int else None,
+            reply_to_id=reply_id if type(reply_id) is int else None,
+        ))
     output.reverse()
     return output
 
 async def collect_safe_history(client: HistoryClient, *, chat_id: int,
                                allowed_chat_ids: frozenset[int], window: DigestWindow,
                                timezone_name: str = DEFAULT_TIMEZONE,
-                               max_messages: int = 5000) -> list[SafeMessage]:
-    raw = await collect_history(client, chat_id=chat_id, allowed_chat_ids=allowed_chat_ids,
-                                window=window, max_messages=max_messages)
+                               max_messages: int = 5000,
+                               media_describer: Callable[[Any], Awaitable[str | None]] | None = None,
+                               ) -> list[SafeMessage]:
+    raw = await collect_history(
+        client, chat_id=chat_id, allowed_chat_ids=allowed_chat_ids,
+        window=window, max_messages=max_messages, media_describer=media_describer,
+    )
     return sanitize_messages(raw, timezone=timezone_name)
