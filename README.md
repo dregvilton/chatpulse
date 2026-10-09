@@ -4,7 +4,7 @@
 
 > **Experimental:** Telegram group selection and history reading are tested
 > on a real account. Local Ollama digest code is available for user testing,
-> but the new model and dynamic-day window remain unverified on a real chat.
+> but delivery from a real Telegram account still needs end-to-end verification.
 
 ChatPulse aims to produce on-demand summaries of busy Telegram conversations,
 without sending private chat content to cloud AI services.
@@ -88,8 +88,8 @@ and prints counts, anonymous participant count and first/last times —
 `--date` reads a selected past day (00:00–24:00). A message limit is enforced
 to prevent silent truncation. `chatpulse logout` clears the saved group.
 
-This is a privacy-preserving integration smoke test, **not** a Telegram message
-sender. Only the separate, explicit `digest` command invokes a local model.
+Preview is read-only. Only an explicit `digest --send` invokes Telegram
+publication after successful local summarization.
 
 ## On-device Ollama digest (experimental)
 
@@ -110,6 +110,34 @@ chatpulse digest --model huihui_ai/qwen3-abliterated:8b \
 # Optional: --tone neutral
 ```
 
+### Post a prominent daily digest to the selected Telegram group
+
+```sh
+# Safe first check: count today's messages, no sending
+chatpulse preview
+
+# Preview the full digest locally, from midnight until invocation
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
+
+# Publish full digest to the previously approved group as YOUR account
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b --send
+```
+
+`--send` is an **explicit one-time publishing action**, not a schedule or
+background bot. It works only for a full digest (never with
+`--sample-messages`), sends one formatted message to the already selected
+group, and does not retry if Telegram delivery becomes ambiguous. The post
+has a bold ⚡ ChatPulse header, date, local time window and compact text.
+Review model accuracy and private details before choosing to publish.
+Telegram receives the resulting digest, not original raw chat history.
+Each subsequent run reads fresh chat messages but excludes earlier posts
+with the ChatPulse header.
+
+For multi-chunk days, the summarizer passes previous context and
+recent replies into the next chunk; technical chunk boundaries are NOT
+treated as separate discussions. This improves continuity but does not
+guarantee factual accuracy.
+
 For less-filtered text in friends' chats, experiment with a downloaded
 uncensored/abliterated model, such as
 `fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b`. First check
@@ -127,8 +155,8 @@ and does not save or transmit anything beyond the local model process.
 The digest uses today's messages until invocation by default, or an explicit
 local time range, redacts and
 pseudonymizes messages before local inference, and prints the result
-**only to your terminal**. It never uploads, sends to Telegram, or saves
-chat content. Large chats are summarized in bounded stages.
+to your terminal. **Only `--send` additionally posts the generated digest**
+to the selected Telegram group. Large chats are summarized in bounded stages.
 
 See [Ollama setup and security limitations](docs/OLLAMA.md).
 
@@ -141,7 +169,7 @@ See [Ollama setup and security limitations](docs/OLLAMA.md).
 - Output: a local LLM-generated digest.
 
 The opt-in `digest` command is experimental and runs only when invoked.
-There is no automatic scheduling or Telegram delivery command yet.
+No unattended scheduling exists. Delivery is opt-in via `--send`.
 
 ## Roadmap
 
