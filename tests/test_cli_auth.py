@@ -109,6 +109,64 @@ class CliTests(unittest.TestCase):
         self.assertIn("Snapshot", output.getvalue())
         self.assertNotIn("PRIVATE CHAT DATA", output.getvalue())
 
+    def test_sample_digest_uses_last_messages_and_labels_partial_result(self):
+        from datetime import date, datetime, time
+        from zoneinfo import ZoneInfo
+        from chatpulse.history import DigestWindow
+        from chatpulse.digest import DigestResult
+        from chatpulse.privacy import SafeMessage
+
+        async def fake_history(*args, **kwargs):
+            tz = ZoneInfo("Asia/Yekaterinburg")
+            return (
+                DigestWindow(
+                    datetime(2026, 10, 8, 0, tzinfo=tz),
+                    datetime(2026, 10, 9, 0, tzinfo=tz),
+                ), True, [
+                    SafeMessage("Participant 1", "08:00", f"SAFE {i}")
+                    for i in range(30)
+                ],
+            )
+
+        seen = []
+        def fake_digest(messages, **kwargs):
+            seen.extend(messages)
+            return DigestResult("Synthetic sample", len(messages), 1)
+
+        output = StringIO()
+        with patch("chatpulse.ollama_local.OllamaLocal.ensure_local"):
+            with patch("chatpulse.group_workflow.read_selected_safe_history",
+                       side_effect=fake_history):
+                with patch("chatpulse.credentials.open_system_vault",
+                           return_value=object()):
+                    with patch("chatpulse.digest.summarize_safe_messages",
+                               side_effect=fake_digest):
+                        with redirect_stdout(output):
+                            self.assertEqual(main([
+                                "digest", "--model", "qwen3:8b",
+                                "--date", "2026-10-08",
+                                "--sample-messages", "20",
+                            ]), 0)
+        self.assertEqual(len(seen), 20)
+        self.assertEqual(seen[0].text, "SAFE 10")
+        self.assertEqual(seen[-1].text, "SAFE 29")
+        self.assertIn("TEST SAMPLE", output.getvalue())
+        self.assertIn("NOT a full-day digest", output.getvalue())
+        self.assertNotIn("SAFE 29", output.getvalue())
+
+    def test_invalid_sample_refused_before_any_network_request(self):
+        error = StringIO()
+        with patch("chatpulse.ollama_local.OllamaLocal.ensure_local",
+                   side_effect=AssertionError("must not contact Ollama")):
+            with patch("chatpulse.group_workflow.read_selected_safe_history",
+                       side_effect=AssertionError("must not contact Telegram")):
+                with redirect_stderr(error):
+                    self.assertEqual(main([
+                        "digest", "--model", "qwen3:8b",
+                        "--sample-messages", "1000",
+                    ]), 1)
+        self.assertIn("Operation failed", error.getvalue())
+
     def test_remote_doctor_rejected_without_printing_endpoint(self):
         err = StringIO()
         with redirect_stderr(err):
