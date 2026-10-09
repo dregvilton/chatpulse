@@ -59,11 +59,13 @@ class DigestTests(unittest.TestCase):
         )
         self.assertEqual(len(model.calls), 1)
         first = model.calls[0]
-        self.assertIn("дословную цитату", first["user"])
-        self.assertIn("дружеский троллинг", first["user"])
+        self.assertIn("110 русских слов", first["user"])
+        self.assertIn("Сцена первая", first["user"])
+        self.assertIn("дословные фразы", first["user"])
         self.assertIn("недоверенные данные", first["user"])
-        self.assertIn("без канцелярита", first["system"].lower())
-        self.assertIn("Не цензурируй мат", first["system"])
+        self.assertIn("не как писатель или модератор", first["system"])
+        self.assertIn("Можно материться", first["system"])
+        self.assertIn("не приписывай реакции", first["system"])
 
     def test_model_output_rechecked_for_personal_data(self):
         class LeakyModel:
@@ -116,7 +118,32 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(response.chunks, 1)
         self.assertEqual(len(model.calls), 1)
         self.assertIn("Жёсткий подкол про радугу", model.calls[0]["user"])
-        self.assertEqual(model.calls[0]["num_predict"], 900)
+        self.assertEqual(model.calls[0]["num_predict"], 420)
+
+    def test_short_neutral_digest_does_not_request_rough_tone(self):
+        model = FakeModel()
+        summarize_safe_messages(
+            [safe("Participant 1", "13:00", "Обсудили фильм.")],
+            model_client=model, model="test:8b", tone="neutral",
+        )
+        self.assertEqual(len(model.calls), 1)
+        self.assertIn("нейтральных пункта", model.calls[0]["user"])
+        self.assertIn("без мата", model.calls[0]["system"])
+        self.assertNotIn("Можно материться", model.calls[0]["system"])
+
+    def test_full_day_final_prompt_is_brief_and_avoids_fiction(self):
+        model = FakeModel()
+        messages = [
+            safe("Participant 1", "12:00", "Сегодня обсуждали спорт " * 50)
+            for _ in range(25)
+        ]
+        summarize_safe_messages(messages, model_client=model, model="test:8b")
+        self.assertGreater(len(model.calls), 2)
+        final = model.calls[-1]
+        self.assertIn("не более 170 слов", final["user"])
+        self.assertIn("выдуманных диалогов", final["user"])
+        self.assertIn("реальных имён", final["user"])
+        self.assertEqual(final["num_predict"], 650)
 
     def test_chunk_bounds_and_multi_pass(self):
         model = FakeModel()
