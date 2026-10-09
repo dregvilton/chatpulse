@@ -194,6 +194,60 @@ class GroupWorkflowTests(unittest.TestCase):
                 ))
         self.assertEqual(self.client.events[-1], "disconnect")
 
+    def test_sample_vision_only_processes_newest_selected_messages(self):
+        from unittest.mock import Mock
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        newest_photo = fake_msg(12, "Новая фотография", 7)
+        newest_photo.photo = object()
+        newest_photo.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        old_photo = fake_msg(10, "", 9)
+        old_photo.photo = object()
+        old_photo.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        # Newest-first: the old picture is outside the sample.
+        self.client.messages = (
+            [newest_photo]
+            + [fake_msg(12, f"Новый текст {i}", 8) for i in range(99)]
+            + [old_photo]
+        )
+        vision = Mock()
+        vision.describe_image.return_value = "На фото рыжая кошка"
+        described = []
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            _, _, safe = asyncio.run(read_selected_safe_history(
+                self.vault, client_factory=self.factory,
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                vision_client=vision, vision_model="qwen3-vl:4b-instruct",
+                sample_messages=100,
+                on_vision_described=lambda: described.append(True),
+            ))
+        self.assertEqual(len(safe), 100)
+        self.assertEqual(self.client.events.count("download"), 1)
+        self.assertEqual(vision.describe_image.call_count, 1)
+        self.assertEqual(len(described), 1)
+        self.assertIn("На фото рыжая кошка", safe[-1].text)
+
+    def test_sample_ignores_images_outside_newest_100(self):
+        from unittest.mock import Mock
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        old_photo = fake_msg(10, "", 9)
+        old_photo.photo = object()
+        old_photo.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        self.client.messages = (
+            [fake_msg(12, f"Недавнее сообщение {i}", 8) for i in range(100)]
+            + [old_photo]
+        )
+        vision = Mock()
+        _, _, safe = asyncio.run(read_selected_safe_history(
+            self.vault, client_factory=self.factory,
+            now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+            vision_client=vision, vision_model="qwen3-vl:4b-instruct",
+            sample_messages=100,
+        ))
+        self.assertEqual(len(safe), 100)
+        self.assertNotIn("download", self.client.events)
+        vision.describe_image.assert_not_called()
+
     def test_media_is_never_downloaded_without_opt_in(self):
         self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
         pic = fake_msg(12, "", 3)
