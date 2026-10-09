@@ -117,6 +117,70 @@ def group_rows(rows: Sequence[str], *, chars_per_chunk: int = 12000) -> list[str
 
 
 
+
+def group_conversation_rows(
+    rows: Sequence[str], *, chars_per_chunk: int = 14000,
+) -> list[str]:
+    """Prefer conversational pauses over arbitrary character boundaries.
+
+    This is a heuristic: consecutive messages can still contain separate
+    topics and long conversations may still exceed a local model context.
+    Every row appears exactly once as new material (overlap is handled
+    separately and explicitly marked as previous context).
+    """
+    if not 2000 <= chars_per_chunk <= 16000:
+        raise ValueError("Invalid inference chunk limit")
+    if any(not isinstance(row, str) or len(row) > chars_per_chunk for row in rows):
+        raise DigestError("Invalid digest source segment")
+
+    def minutes(row: str) -> int | None:
+        try:
+            value = json.loads(row)["time"]
+            hour, minute = map(int, value.split(":"))
+            if not (0 <= hour < 24 and 0 <= minute < 60):
+                return None
+            return hour * 60 + minute
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return None
+
+    def pause_boundary(pending: list[str]) -> int | None:
+        """Last >=12-minute pause after >=70% of one context budget."""
+        left_chars = 0
+        best = None
+        for index in range(1, len(pending)):
+            left_chars += len(pending[index - 1]) + 1
+            previous, current = minutes(pending[index - 1]), minutes(pending[index])
+            if (left_chars >= chars_per_chunk * 0.70
+                    and previous is not None and current is not None
+                    and current - previous >= 12):
+                best = index
+        return best
+
+    chunks: list[str] = []
+    pending: list[str] = []
+    count = 0
+    for row in rows:
+        addition = len(row) + 1
+        while pending and count + addition > chars_per_chunk:
+            boundary = pause_boundary(pending)
+            if boundary is None:
+                chunks.append("\n".join(pending))
+                pending, count = [], 0
+            else:
+                chunks.append("\n".join(pending[:boundary]))
+                pending = pending[boundary:]
+                count = sum(len(part) + 1 for part in pending)
+            if len(chunks) > 48:
+                raise DigestError("Too many chunks for a safe bounded digest")
+        pending.append(row)
+        count += addition
+    if pending:
+        chunks.append("\n".join(pending))
+    if len(chunks) > 48:
+        raise DigestError("Too many chunks for a safe bounded digest")
+    return chunks
+
+
 def overlap_rows(chunk: str, *, max_chars: int = 1300) -> str:
     """Carry complete preceding JSON rows across boundaries as context only."""
     if not 0 <= max_chars <= 2000:
@@ -150,9 +214,10 @@ def summarize_safe_messages(
         raise ValueError("Unsupported digest tone")
     if not messages or len(messages) > 5000:
         raise DigestError("No messages or message count out of range")
-    # Slightly larger chronological batches reduce local inference round trips.
+    # Prefer splitting around long chat pauses where the context budget allows.
+    # Very long conversations still need overlap and continuity notes.
     # The fixed 8192-token context still bounds every request.
-    chunks = group_rows(message_rows(messages), chars_per_chunk=14000)
+    chunks = group_conversation_rows(message_rows(messages), chars_per_chunk=14000)
     if not chunks:
         raise DigestError("No nonempty messages to summarize")
     system = SYSTEM_RULES + TONE_RULES[tone]
@@ -247,7 +312,7 @@ def summarize_safe_messages(
         if len(reduced) == 1:
             prompt = (
                 "Это заметки по целому дню. Составь короткий дайджест: "
-                "4–6 конкретных пунктов, не более 170 слов суммарно. "
+                "2–4 связных сюжета, не более 140 слов суммарно. "
                 "Пункты начинаются с «•», каждый 1–2 коротких предложения. "
                 "Никаких «сцен», вступлений, выдуманных диалогов, "
                 "психологических мотивов или морали. "
@@ -256,6 +321,12 @@ def summarize_safe_messages(
                 "собери его в одну цельную историю по хронологии. "
                 "Не перечисляй номера пачек. "
                 "Сведи связанные споры в одну тему, не повторяй их. "
+                "Один пункт = ОДНА связная история. Никогда не склеивай "
+                "случайные соседние шутки из разных разговоров в общий "
+                "пункт ради количества или мата. Не выдумывай причинную "
+                "связь между событиями. Если смысл заметок неясен, "
+                "выкинь сомнительный эпизод. Это может быть срез дня: "
+                "не используй выражение «финал дня». "
                 "Без «Что осталось открытым», если не было реального "
                 "вопроса, по которому ждут ответа. "
                 "Сохрани шутки и оригинальную грубую лексику, если "
