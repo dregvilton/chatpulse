@@ -202,7 +202,8 @@ def _digest_history(*, day: date | None, model: str, tone: str,
                     from_time: clock_time | None = None,
                     to_time: clock_time | None = None,
                     sample_messages: int | None = None,
-                    send: bool = False) -> None:
+                    send: bool = False, vision_model: str | None = None,
+                    max_images: int = 4) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.digest import summarize_safe_messages
     from chatpulse.group_workflow import read_selected_safe_history
@@ -218,10 +219,20 @@ def _digest_history(*, day: date | None, model: str, tone: str,
     # is retrieved unless local model/configuration checks are successful.
     local = OllamaLocal()
     local.ensure_local(model)
+    if vision_model is not None:
+        local.ensure_local(vision_model)
     print("Local-only model preflight passed. Reading the approved group...", flush=True)
+    if vision_model is not None:
+        print(
+            f"Local vision enabled: up to {max_images} photos/static stickers "
+            "will be described in RAM; GIFs and animations are labeled only.",
+            flush=True,
+        )
     window, finished, messages = asyncio.run(
         read_selected_safe_history(
-            open_system_vault(), day=day, from_time=from_time, to_time=to_time
+            open_system_vault(), day=day, from_time=from_time, to_time=to_time,
+            vision_client=local if vision_model is not None else None,
+            vision_model=vision_model, max_images=max_images,
         )
     )
     if not messages:
@@ -318,6 +329,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     digest_parser.add_argument("--send", action="store_true",
                                help="Explicitly post the finished full digest to the approved group")
+    digest_parser.add_argument(
+        "--vision-model", default=None,
+        help="OPT-IN: a downloaded local vision model (e.g. qwen3-vl:4b)",
+    )
+    digest_parser.add_argument(
+        "--max-images", type=int, choices=range(1, 9), metavar="{1..8}",
+        default=4, help="Max photo/static-sticker descriptions (default 4)",
+    )
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
     try:
@@ -349,6 +368,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 day=args.date, model=args.model, tone=args.tone,
                 from_time=args.from_time, to_time=args.to_time,
                 sample_messages=args.sample_messages, send=args.send,
+                vision_model=args.vision_model, max_images=args.max_images,
             )
         elif args.command == "logout":
             _logout()
