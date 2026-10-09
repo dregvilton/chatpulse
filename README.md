@@ -104,8 +104,16 @@ chatpulse local-models
 chatpulse digest --model huihui_ai/qwen3-abliterated:8b
 chatpulse digest --model huihui_ai/qwen3-abliterated:8b --date 2026-10-08 \
   --from-time 07:00 --to-time 19:30
+# For faster model comparisons, summarize only the last 100 messages:
+chatpulse digest --model huihui_ai/qwen3-abliterated:8b \
+  --date 2026-10-08 --sample-messages 100
 # Optional: --tone neutral
 ```
+
+`--sample-messages 20..250` is a **quick test only**, not a full-day
+digest. It reads the chosen time window into memory, uses only its last
+N redacted messages for inference, clearly labels the output as partial,
+and does not save or transmit anything beyond the local model process.
 
 The digest uses today's messages until invocation by default, or an explicit
 local time range, redacts and
