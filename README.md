@@ -119,13 +119,22 @@ chatpulse preview
 # Preview the full digest locally, from midnight until invocation
 chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
 
-# Publish full digest to the previously approved group as YOUR account
+# Recommended: review the generated digest, then type SEND to publish it.
+# Same generation: no duplicate model call and no draft saved to disk.
+chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b --review-send
+
+# Advanced/unchecked: immediately publish without confirmation.
 chatpulse digest --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b --send
 ```
 
-`--send` is an **explicit one-time publishing action**, not a schedule or
-background bot. It works only for a full digest (never with
-`--sample-messages`), sends one formatted message to the already selected
+`--review-send` is recommended: show a full digest first, then type
+`SEND` in the **same interactive terminal** to publish the exact summary
+already generated. There is no saved draft, no second generation and no
+send on Enter/other input. This preserves the original no-content-on-disk
+privacy boundary. `--send` remains an **explicit unchecked immediate**
+one-time publishing action, not a schedule or background bot. Both work
+only for full digests (never with `--sample-messages`) and send one
+formatted message to the already selected
 group, and does not retry if Telegram delivery becomes ambiguous. The post
 has a bold ⚡ ChatPulse header, date, local time window and compact text.
 Review model accuracy and private details before choosing to publish.
@@ -192,8 +201,10 @@ chatpulse digest \
   --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
   --vision-model qwen3-vl:4b --max-images 4
 
-# Publish ONLY after inspecting an unsent preview:
-# chatpulse digest --model MODEL --vision-model qwen3-vl:4b --send
+# Recommended for real group: same generation, inspect and type SEND
+chatpulse digest \
+  --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
+  --vision-model qwen3-vl:4b --max-images 4 --review-send
 ```
 
 The vision model describes eligible photos and *static* WebP stickers in
