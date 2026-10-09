@@ -171,6 +171,29 @@ class GroupWorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("PRIVATE", str([m.text for m in safe]))
 
+    def test_invalid_local_model_verification_still_fails_closed(self):
+        from chatpulse.ollama_local import OllamaCompletionError
+        from unittest.mock import Mock
+
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        pic = fake_msg(12, "Это приватное тестовое сообщение", 3)
+        pic.photo = object()
+        pic.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+        self.client.messages = [pic]
+        vision = Mock()
+        vision.describe_image.side_effect = OllamaCompletionError(
+            "Ollama returned invalid JSON"
+        )
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            with self.assertRaises(OllamaCompletionError):
+                asyncio.run(read_selected_safe_history(
+                    self.vault, client_factory=self.factory,
+                    now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                    vision_client=vision, vision_model="qwen3-vl:4b-instruct",
+                ))
+        self.assertEqual(self.client.events[-1], "disconnect")
+
     def test_media_is_never_downloaded_without_opt_in(self):
         self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
         pic = fake_msg(12, "", 3)
