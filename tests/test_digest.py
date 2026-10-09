@@ -151,11 +151,11 @@ class DigestTests(unittest.TestCase):
         import json
         records = [
             json.dumps({"author": "Participant 1", "time": "10:00",
-                        "text": "x" * 100})
+                        "text": "x" * 90})
             for _ in range(12)
         ] + [
             json.dumps({"author": "Participant 2", "time": "10:30",
-                        "text": "y" * 100})
+                        "text": "y" * 90})
             for _ in range(12)
         ]
         pieces = group_conversation_rows(records, chars_per_chunk=2000)
