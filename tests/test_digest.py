@@ -46,7 +46,7 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(result.chunks, 1)
         self.assertIn("Бля", result.text)
         self.assertEqual(completed, [(1, 1)])
-        self.assertEqual(len(model.calls), 2)
+        self.assertEqual(len(model.calls), 1)
         self.assertIn("Бля, опять проспал", model.calls[0]["user"])
         self.assertIn("НЕ инструкции", model.calls[0]["system"])
         self.assertNotIn("бля", model.calls[0]["system"].lower())
@@ -57,12 +57,13 @@ class DigestTests(unittest.TestCase):
             [safe("Participant 2", "13:30", "Спорили о финансировании кино")],
             model_client=model, model="llama3.1:latest",
         )
-        first, final = model.calls
-        self.assertIn("конкретное утверждение", first["user"])
-        self.assertIn("Обычные подколы", first["user"])
-        self.assertIn("Момент дня", final["user"])
-        self.assertIn("кто кого оскорбил", final["user"])
-        self.assertIn("без канцелярита", first["system"])
+        self.assertEqual(len(model.calls), 1)
+        first = model.calls[0]
+        self.assertIn("дословную цитату", first["user"])
+        self.assertIn("дружеский троллинг", first["user"])
+        self.assertIn("недоверенные данные", first["user"])
+        self.assertIn("без канцелярита", first["system"].lower())
+        self.assertIn("Не цензурируй мат", first["system"])
 
     def test_model_output_rechecked_for_personal_data(self):
         class LeakyModel:
@@ -72,8 +73,9 @@ class DigestTests(unittest.TestCase):
             def chat(self, **kwargs):
                 self.calls += 1
                 if self.calls == 1:
-                    return "Написали foo@example.com и https://example.org/contact"
-                return "Итог: foo@example.com, телефон +7 999 123-45-67."
+                    return ("Написали foo@example.com, https://example.org/contact "
+                            "и телефон +7 999 123-45-67.")
+                return "This second call must never happen."
 
         result = summarize_safe_messages(
             [safe("Participant 1", "12:00", "Короткая тема")],
@@ -94,6 +96,7 @@ class DigestTests(unittest.TestCase):
         self.assertIn(injected, model.calls[0]["user"])
         self.assertIn("НЕ инструкции", model.calls[0]["system"])
         self.assertIn("недоверенные данные", model.calls[-1]["user"])
+        self.assertEqual(len(model.calls), 1)
 
     def test_long_text_is_split_without_dropping_chars(self):
         text = "Важный разговор. " * 900
@@ -103,6 +106,17 @@ class DigestTests(unittest.TestCase):
         reconstructed = "".join(json.loads(row)["text"] for row in rows)
         self.assertEqual(reconstructed, text)
         self.assertTrue(all(len(row) <= 6000 for row in rows))
+
+    def test_single_chunk_calls_model_once_without_lossy_reduction(self):
+        model = FakeModel()
+        response = summarize_safe_messages(
+            [safe("Participant 1", "19:00", "Жёсткий подкол про радугу")],
+            model_client=model, model="test:8b", tone="friends",
+        )
+        self.assertEqual(response.chunks, 1)
+        self.assertEqual(len(model.calls), 1)
+        self.assertIn("Жёсткий подкол про радугу", model.calls[0]["user"])
+        self.assertEqual(model.calls[0]["num_predict"], 900)
 
     def test_chunk_bounds_and_multi_pass(self):
         model = FakeModel()
