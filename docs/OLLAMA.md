@@ -48,6 +48,26 @@ conversation context across technical chunks, and related stories are merged
 at the final stage. This is best effort, not a factual accuracy guarantee.
 Model processing can take substantial time on less powerful machines.
 
+## Optional image/sticker comprehension
+
+Photos and static WebP stickers are excluded unless `--vision-model` is
+explicitly supplied. Install with `pip install -e '.[vision]'`, pull
+`qwen3-vl:4b` deliberately, then use `--vision-model qwen3-vl:4b
+--max-images 4`. Each media file must advertise a size no greater than
+3 MB; decoding and JPEG resizing (maximum 768 pixels per side) happen
+in RAM, with at most 4 images by default and an absolute cap of 8.
+An image is sent only to the approved local Ollama server and its downloaded
+vision model; it is not written to a file. Vision descriptions are
+best-effort; animated stickers/GIFs are labeled but not decoded.
+The vision model is unloaded after each request to leave memory for the
+main text summarizer.
+
+Reply relationships are mapped to per-run turn numbers (`m1` etc.).
+Telegram's original message IDs are not sent to the model.
+Media may contain personal information; the local vision model may
+misidentify it or hallucinate details. Do not publish without checking
+the digest for errors.
+
 ## Security boundaries
 
 - ChatPulse only uses an explicitly numeric loopback HTTP origin such as
