@@ -179,7 +179,7 @@ ollama rm CognitiveComputations/dolphin-mistral-nemo:12b-v2.9.3-Q4_K_M
 ```
 
 Keep your current `fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b`
-and `qwen3-vl:4b` if installed. Deleting models only affects local Ollama
+and `qwen3-vl:4b-instruct` if installed. Deleting models only affects local Ollama
 model files; confirm names with `ollama list` before deleting.
 
 ### Optional local image and sticker context
@@ -193,18 +193,20 @@ preprocessing extra and download a local vision model:
 
 ```sh
 python -m pip install -e '.[vision]'
-ollama pull qwen3-vl:4b
+ollama pull qwen3-vl:4b-instruct
 chatpulse local-models
+# Safe visual check on a synthetic image (never reads Telegram):
+chatpulse vision-check --model qwen3-vl:4b-instruct
 
 # Preview only: includes up to 4 photos or static WebP stickers, all in RAM
 chatpulse digest \
   --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
-  --vision-model qwen3-vl:4b --max-images 4
+  --vision-model qwen3-vl:4b-instruct --max-images 4
 
 # Recommended for real group: same generation, inspect and type SEND
 chatpulse digest \
   --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
-  --vision-model qwen3-vl:4b --max-images 4 --review-send
+  --vision-model qwen3-vl:4b-instruct --max-images 4 --review-send
 ```
 
 The vision model describes eligible photos and *static* WebP stickers in
@@ -217,7 +219,16 @@ Descriptions are best-effort and can misread memes or contain identifying
 details. No media is downloaded without the explicit `--vision-model` flag.
 On a 16 GB Mac the vision model is unloaded after each image and
 the main digest model runs afterward, so the first multimodal preview
-can take longer. Test **without `--send` first**.
+can take longer. Test **without `--send` first**. Prefer
+`qwen3-vl:4b-instruct` over the `qwen3-vl:4b` alias, which currently
+points to the Thinking variant and can use all output tokens without
+producing a caption. The optional visual stage degrades to labeled
+image placeholders if the model produces an unusable completion,
+with a fixed, privacy-safe warning; it does **not** silently fabricate
+image content. Any fail-closed local model/security verification error
+still aborts the request. If you installed an older Thinking version,
+keep it until the Instruct smoke test works, then optionally remove it
+with `ollama rm qwen3-vl:4b`.
 
 For less-filtered text in friends' chats, experiment with a downloaded
 uncensored/abliterated model, such as
