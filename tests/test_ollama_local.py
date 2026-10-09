@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from chatpulse.ollama_local import (
-    LocalModelError, OllamaLocal, assert_cloud_disabled,
+    LocalModelError, OllamaHTTPError, OllamaLocal, assert_cloud_disabled,
     validate_local_model_name,
 )
 
@@ -125,6 +125,18 @@ class OllamaTests(unittest.TestCase):
             with self.assertRaises(LocalModelError):
                 self.gateway().local_models()
         self.assertEqual(len(FakeHttpConnection.created), 1)
+
+    def test_http_error_reports_only_status_and_safe_route(self):
+        FakeHttpConnection.responses = [
+            FakeResponse({"error": "secret private user conversation"}, status=500)
+        ]
+        with patch("chatpulse.ollama_local.http.client.HTTPConnection",
+                   FakeHttpConnection):
+            with self.assertRaises(OllamaHTTPError) as observed:
+                self.gateway().local_models()
+        self.assertEqual(observed.exception.status, 500)
+        self.assertEqual(observed.exception.route, "/api/tags")
+        self.assertNotIn("secret private", str(observed.exception))
 
     def test_non_local_urls_rejected(self):
         for url in ("https://127.0.0.1:11434", "http://ollama.com:11434",
