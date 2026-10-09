@@ -67,6 +67,7 @@ class RatingsTests(unittest.TestCase):
         self.assertEqual(data["runs"][0]["messages"], 6)
         self.assertEqual(data["runs"][-1]["messages"], 105)
 
+    @unittest.skipIf(os.name == "nt", "Symlinks may require elevated privileges on Windows")
     def test_symlink_target_rejected(self):
         source = Path(self.tempdir.name) / "other.json"
         source.write_text("PRIVATE", encoding="utf-8")
