@@ -27,6 +27,7 @@ class RawMessage:
     text: str
     message_id: int | None = None
     reply_to_id: int | None = None
+    sender_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +70,11 @@ def sanitize_messages(
     records = list(messages)
     alias_set = set(aliases)
     alias_set.update(m.sender_name for m in records if m.sender_name)
+    for message in records:
+        alias_set.update(
+            alias for alias in message.sender_aliases
+            if isinstance(alias, str) and 2 <= len(alias) <= 80
+        )
     # Only transient local turn numbers reach Ollama. Raw Telegram IDs never do.
     turns = {
         m.message_id: f"m{i}"
