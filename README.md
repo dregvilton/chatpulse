@@ -164,7 +164,7 @@ is saved for training. `chatpulse rate` requires no network connection.
 ```sh
 ollama list
 ollama rm llama3.1:latest
-ollama rm fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
+ollama rm huihui_ai/qwen3-abliterated:8b
 ollama rm dolphin3:8b
 ollama rm CognitiveComputations/dolphin-mistral-nemo:12b-v2.9.3-Q4_K_M
 ```
