@@ -20,6 +20,25 @@ class PrivacyTests(unittest.TestCase):
         self.assertIn("бля", payload)
         self.assertIn("15:30", payload)
 
+    def test_reply_to_uses_transient_turns_never_raw_telegram_ids(self):
+        t = datetime(2026, 10, 8, 12, 30, tzinfo=timezone.utc)
+        messages = [
+            RawMessage(44, None, t, "Warzone", message_id=900111),
+            RawMessage(55, None, t, "Не, Dota", message_id=900112),
+            RawMessage(44, None, t, "Варзон лучше", message_id=900113,
+                       reply_to_id=900111),
+            RawMessage(55, None, t, "Дота норм", message_id=900114,
+                       reply_to_id=900112),
+        ]
+        safe = sanitize_messages(messages, timezone="UTC")
+        self.assertEqual([m.turn for m in safe], ["m1", "m2", "m3", "m4"])
+        self.assertEqual([m.reply_to_turn for m in safe],
+                         [None, None, "m1", "m2"])
+        exported = json.dumps([m.as_payload() for m in safe])
+        for raw_id in ("900111", "900112", "900113", "900114"):
+            self.assertNotIn(raw_id, exported)
+        self.assertIn('"reply_to": "m1"', exported)
+
     def test_text_identifier_patterns(self):
         result = redact_text(
             "Write name@example.com @exampleuser or https://t.me/exampleuser "
