@@ -7,6 +7,7 @@ Ollama cloud-disabled config and a locally stored model are mandatory.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import base64
 import http.client
 import json
 from pathlib import Path
@@ -167,6 +168,40 @@ class OllamaLocal:
         if not isinstance(details, dict) or not isinstance(details.get("format"), str):
             raise LocalModelError("Model has no verified local details")
         return name
+
+    def describe_image(self, *, model: str, jpeg: bytes) -> str:
+        """One in-memory JPEG, local-only; never print image or reply bodies."""
+        self.ensure_local(model)
+        if not isinstance(jpeg, bytes) or not 100 <= len(jpeg) <= 900_000:
+            raise LocalModelError("Invalid or oversized visual input")
+        response = self._json("POST", "/api/chat", {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": (
+                    "Опиши картинку по-русски в одном коротком предложении: "
+                    "что конкретно изображено, какой текст виден и в чём "
+                    "может быть визуальная шутка. Не фантазируй, "
+                    "не угадывай личности людей или приватные данные. "
+                    "Если не понял — ответь 'изображение не распознано'."
+                ),
+                "images": [base64.b64encode(jpeg).decode("ascii")],
+            }],
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": 0.1,
+                "num_ctx": 4096,
+                "num_predict": 125,
+            },
+        })
+        if response.get("model") != model or response.get("done") is not True:
+            raise OllamaCompletionError("Visual model or completion mismatch")
+        answer = response.get("message")
+        result = answer.get("content") if isinstance(answer, dict) else None
+        if not isinstance(result, str) or not result.strip() or len(result) > 700:
+            raise OllamaCompletionError("Invalid local image description")
+        return result.strip()
 
     def chat(
         self, *, model: str, system: str, user: str,
