@@ -4,7 +4,7 @@
 
 > **Experimental:** Telegram group selection and history reading are tested
 > on a real account. Local Ollama digest code is available for user testing,
-> but delivery from a real Telegram account still needs end-to-end verification.
+> but the full multimodal pipeline still needs real-chat validation.
 
 ChatPulse aims to produce on-demand summaries of busy Telegram conversations,
 without sending private chat content to cloud AI services.
@@ -137,6 +137,41 @@ For multi-chunk days, the summarizer passes previous context and
 recent replies into the next chunk; technical chunk boundaries are NOT
 treated as separate discussions. This improves continuity but does not
 guarantee factual accuracy.
+
+### Optional local image and sticker context
+
+ChatPulse can now preserve Telegram reply-thread structure in a digest by
+mapping raw Telegram IDs to transient `m1`, `m2`, etc., and indicating
+which earlier turn each reply addresses. Raw IDs are never given to Ollama.
+
+Vision is **opt-in**. Before trying it, explicitly install the image
+preprocessing extra and download a local vision model:
+
+```sh
+python -m pip install -e '.[vision]'
+ollama pull qwen3-vl:4b
+chatpulse local-models
+
+# Preview only: includes up to 4 photos or static WebP stickers, all in RAM
+chatpulse digest \
+  --model fredrezones55/Qwen3.5-Uncensored-HauhauCS-Aggressive:9b \
+  --vision-model qwen3-vl:4b --max-images 4
+
+# Publish ONLY after inspecting an unsent preview:
+# chatpulse digest --model MODEL --vision-model qwen3-vl:4b --send
+```
+
+The vision model describes eligible photos and *static* WebP stickers in
+short Russian captions, directly in memory. GIFs, videos, voice messages,
+animated stickers, oversized files, and images beyond the cap are not
+decoded. No image data or captions are written to disk or forwarded to
+remote LLM services. The original Telegram server already hosts the
+media: downloading it requires an approved, authorized group session.
+Descriptions are best-effort and can misread memes or contain identifying
+details. No media is downloaded without the explicit `--vision-model` flag.
+On a 16 GB Mac the vision model is unloaded after each image and
+the main digest model runs afterward, so the first multimodal preview
+can take longer. Test **without `--send` first**.
 
 For less-filtered text in friends' chats, experiment with a downloaded
 uncensored/abliterated model, such as
