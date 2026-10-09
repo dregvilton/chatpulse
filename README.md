@@ -243,6 +243,20 @@ two LLM passes. Model quality and factual accuracy must be reviewed.
 digest. It reads the chosen time window into memory, uses only its last
 N redacted messages for inference, clearly labels the output as partial,
 and does not save or transmit anything beyond the local model process.
+Vision descriptions are now attempted only for eligible media **within**
+the sampled newest-N messages, not older images encountered when
+scanning the whole day's history. CLI prints only the number of
+successfully described images, never the media content.
+
+One-chunk samples containing 30+ messages use a grounded two-pass
+summarization: first extract important episodes with exact source
+quotes, discard unsupported quoted phrases, then create the final
+summary while still seeing the original redacted messages.
+This costs an extra local model invocation and improves the
+evidence available to the final model, but does not guarantee
+absence of hallucinations. Cached sender display names/usernames
+are used as extra local redaction aliases when available without
+making contact requests; unrecognized free-text names still may leak.
 
 The digest uses today's messages until invocation by default, or an explicit
 local time range, redacts and
