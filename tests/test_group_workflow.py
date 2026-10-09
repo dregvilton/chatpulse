@@ -76,6 +76,23 @@ class GroupWorkflowTests(unittest.TestCase):
         self.assertEqual(session, "1" + "Q" * 100)
         return self.client
 
+    def test_real_pillow_conversion_stays_bounded_in_memory(self):
+        from io import BytesIO
+        from PIL import Image
+        from chatpulse.group_workflow import prepare_image_jpeg
+
+        original = Image.new("RGB", (1200, 800), (14, 40, 155))
+        raw = BytesIO()
+        original.save(raw, format="PNG")
+        jpeg = prepare_image_jpeg(raw.getvalue())
+        self.assertTrue(jpeg.startswith(bytes((255, 216))))
+        self.assertLess(len(jpeg), 900_000)
+        with Image.open(BytesIO(jpeg)) as check:
+            self.assertLessEqual(check.width, 768)
+            self.assertLessEqual(check.height, 768)
+        with self.assertRaises(ValueError):
+            prepare_image_jpeg(b"x" * 3_000_001)
+
     def test_media_classification_is_strict(self):
         jpeg = SimpleNamespace(photo=object(), sticker=None, gif=None, file=None)
         sticker = SimpleNamespace(photo=None, sticker=object(), gif=None,
