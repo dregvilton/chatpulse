@@ -132,6 +132,45 @@ class GroupWorkflowTests(unittest.TestCase):
         self.assertEqual(vision.describe_image.call_count, 1)
         self.assertIn("download", self.client.events)
 
+    def test_visual_empty_completion_degrades_to_text_only(self):
+        from chatpulse.ollama_local import VisionDescriptionError
+        from unittest.mock import Mock
+
+        self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
+        photos = []
+        for i in range(3):
+            pic = fake_msg(12, f"Текст про картинку {i}", i + 1)
+            pic.photo = object()
+            pic.file = SimpleNamespace(size=100, mime_type="image/jpeg")
+            photos.append(pic)
+        self.client.messages = photos
+        vision = Mock()
+        vision.describe_image.side_effect = VisionDescriptionError(
+            "empty-description"
+        )
+        reasons = []
+        with patch("chatpulse.group_workflow.prepare_image_jpeg",
+                   return_value=b"jpegbytes"):
+            _, _, safe = asyncio.run(read_selected_safe_history(
+                self.vault, client_factory=self.factory,
+                now=datetime(2026, 10, 8, 14, tzinfo=timezone.utc),
+                vision_client=vision, vision_model="qwen3-vl:4b-instruct",
+                on_vision_warning=reasons.append,
+            ))
+        self.assertEqual(len(safe), 3)
+        self.assertEqual(self.client.events.count("download"), 1)
+        self.assertEqual(vision.describe_image.call_count, 1)
+        self.assertEqual(reasons, ["empty-description"])
+        self.assertTrue(all("Текст про картинку" in msg.text for msg in safe))
+        self.assertEqual(
+            sum("описание недоступно" in msg.text for msg in safe), 1
+        )
+        self.assertEqual(
+            sum("локальное описание временно недоступно" in msg.text
+                for msg in safe), 2
+        )
+        self.assertNotIn("PRIVATE", str([m.text for m in safe]))
+
     def test_media_is_never_downloaded_without_opt_in(self):
         self.vault.save_selected_chat(SelectedChat("megagroup", 555, -777))
         pic = fake_msg(12, "", 3)
