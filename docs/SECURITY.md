@@ -72,8 +72,16 @@
   terminal scrollback and potentially to local malware.
 - Prompts explicitly treat chat contents as data, not instructions;
   prompt-injection attacks can still influence LLM output.
-- No automatic downloads, system prompts containing user secrets, remote
-  requests, exports, or Telegram delivery.
+- No automatic model downloads, system prompts containing user secrets,
+  remote LLM requests, content logs or scheduled delivery. Explicit
+  `digest --send` transmits the generated summary to the approved Telegram
+  group using the authenticated user account; Telegram and its recipients
+  can then store/forward it. `--sample-messages` cannot be combined with
+  `--send`. ChatPulse does not retry ambiguous sends.
+- In multi-chunk digests prior pseudonymized summary notes and a bounded
+  overlap of safe chat messages are supplied as context to later chunks;
+  this increases model input but never sends raw Telegram objects to an LLM.
+  The model may still hallucinate people and events.
 - See [Ollama setup and trust boundaries](OLLAMA.md).
 
 ## Pending for production readiness
@@ -83,7 +91,8 @@
 - Evaluate local summary performance and bounded adaptive scheduling; currently
   all runs are manual and the current day ends at invocation.
 - Stronger free-text redaction and prompt-injection resistance tests.
-- Delivery opt-in, production security review and dependency pinning.
+- Real-device testing of opt-in delivery, safe sender permissions, production
+  security review and dependency pinning.
 - Packaging supply-chain verification and secret scanning.
 
 ## Vulnerability reporting
