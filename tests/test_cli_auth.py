@@ -181,6 +181,104 @@ class CliTests(unittest.TestCase):
                     ]), 1)
         self.assertIn("Operation failed", error.getvalue())
 
+    def test_format_group_post_has_visible_header_and_escapes_html(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from chatpulse.history import DigestWindow
+        from chatpulse.cli import _format_group_post
+        local = ZoneInfo("Asia/Yekaterinburg")
+        window = DigestWindow(
+            datetime(2026, 10, 9, 0, tzinfo=local),
+            datetime(2026, 10, 9, 18, 15, tzinfo=local),
+        )
+        post = _format_group_post(
+            digest="• **Пацаны:** хуй <script> & foo@example.com",
+            window=window, message_count=142,
+        )
+        self.assertIn("⚡ <b>CHATPULSE · ДАЙДЖЕСТ</b> ⚡\n", post)
+        self.assertIn("09.10.2026", post)
+        self.assertIn("00:00–18:15", post)
+        self.assertIn("• <b>Пацаны:</b> хуй &lt;script&gt; &amp; [email]", post)
+        self.assertNotIn("foo@example.com", post)
+        self.assertIn("142 сообщений", post)
+
+    def test_publish_to_selected_peer_once_without_chat_discovery(self):
+        import asyncio
+        from chatpulse.cli import _send_group_post
+        from chatpulse.selection import SelectedChat
+        from telethon.tl.types import InputPeerChannel
+        from unittest.mock import AsyncMock, Mock
+
+        class StubVault:
+            def load_selected_chat(self):
+                return SelectedChat("megagroup", 123, 456)
+
+            def load(self):
+                from chatpulse.credentials import TelegramCredentials
+                return TelegramCredentials(7, "a" * 32, "1" + "Q" * 100)
+
+        client = Mock()
+        client.connect = AsyncMock()
+        client.disconnect = AsyncMock()
+        client.is_user_authorized = AsyncMock(return_value=True)
+        client.send_message = AsyncMock(return_value=object())
+        with patch("chatpulse.telegram_auth._make_client", return_value=client):
+            asyncio.run(_send_group_post(StubVault(), "<b>Fixture</b>"))
+        client.send_message.assert_awaited_once()
+        args, kwargs = client.send_message.await_args
+        self.assertIsInstance(args[0], InputPeerChannel)
+        self.assertEqual(args[0].channel_id, 123)
+        self.assertEqual(args[1], "<b>Fixture</b>")
+        self.assertEqual(kwargs["parse_mode"], "html")
+        self.assertIs(kwargs["link_preview"], False)
+        client.disconnect.assert_awaited_once()
+
+    def test_send_sample_rejected_before_network_or_model_check(self):
+        err = StringIO()
+        with patch("chatpulse.ollama_local.OllamaLocal.ensure_local",
+                   side_effect=AssertionError("unexpected model call")):
+            with redirect_stderr(err):
+                self.assertEqual(main([
+                    "digest", "--model", "test:8b", "--sample-messages", "100",
+                    "--send",
+                ]), 1)
+        self.assertIn("Operation failed", err.getvalue())
+
+    def test_digest_send_posts_formatted_summary_once(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from chatpulse.history import DigestWindow
+        from chatpulse.digest import DigestResult
+        from chatpulse.privacy import SafeMessage
+        from unittest.mock import AsyncMock
+
+        zone = ZoneInfo("Asia/Yekaterinburg")
+        async def fake_history(*args, **kwargs):
+            return DigestWindow(
+                datetime(2026, 10, 9, 0, tzinfo=zone),
+                datetime(2026, 10, 9, 12, tzinfo=zone),
+            ), False, [SafeMessage("Participant 1", "10:00", "PRIVATE SOURCE")]
+
+        delivery = AsyncMock()
+        out = StringIO()
+        with patch("chatpulse.ollama_local.OllamaLocal.ensure_local"):
+            with patch("chatpulse.group_workflow.read_selected_safe_history",
+                       side_effect=fake_history):
+                with patch("chatpulse.credentials.open_system_vault",
+                           return_value=object()):
+                    with patch("chatpulse.digest.summarize_safe_messages",
+                               return_value=DigestResult("• Реальная шутка", 1, 1)):
+                        with patch("chatpulse.cli._send_group_post", delivery):
+                            with redirect_stdout(out):
+                                self.assertEqual(main([
+                                    "digest", "--model", "test:8b", "--send",
+                                ]), 0)
+        delivery.assert_awaited_once()
+        post = delivery.await_args.args[1]
+        self.assertIn("Реальная шутка", post)
+        self.assertNotIn("PRIVATE SOURCE", post)
+        self.assertIn("Digest was published", out.getvalue())
+
     def test_remote_doctor_rejected_without_printing_endpoint(self):
         err = StringIO()
         with redirect_stderr(err):
