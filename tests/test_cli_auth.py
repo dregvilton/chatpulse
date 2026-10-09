@@ -121,6 +121,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("Synthetic summary", output.getvalue())
         self.assertIn("(07:00–19:00", output.getvalue())
         self.assertIn("Snapshot", output.getvalue())
+        self.assertIn("Local preview only.", output.getvalue())
         self.assertNotIn("PRIVATE CHAT DATA", output.getvalue())
 
     def test_sample_digest_uses_last_messages_and_labels_partial_result(self):
@@ -278,6 +279,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("Реальная шутка", post)
         self.assertNotIn("PRIVATE SOURCE", post)
         self.assertIn("Digest was published", out.getvalue())
+        self.assertIn("Telegram publication was requested", out.getvalue())
+        self.assertNotIn("No Telegram messages sent", out.getvalue())
 
     def test_remote_doctor_rejected_without_printing_endpoint(self):
         err = StringIO()
