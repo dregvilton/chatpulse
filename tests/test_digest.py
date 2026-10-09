@@ -109,6 +109,24 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(reconstructed, text)
         self.assertTrue(all(len(row) <= 6000 for row in rows))
 
+    def test_digest_prompt_follows_reply_links(self):
+        import json
+        model = FakeModel()
+        messages = [
+            SafeMessage("Participant 1", "12:00", "Warzone", turn="m1"),
+            SafeMessage("Participant 2", "12:01", "Dota", turn="m2"),
+            SafeMessage("Participant 1", "12:02", "Warzone лучше",
+                        turn="m3", reply_to_turn="m1"),
+        ]
+        rows = [json.loads(row) for row in message_rows(messages)]
+        self.assertEqual(rows[2]["reply_to"], "m1")
+        summarize_safe_messages(messages, model_client=model, model="test:8b")
+        prompt = model.calls[0]["user"]
+        self.assertIn("reply_to", prompt)
+        self.assertIn("не путай ветки", prompt)
+        self.assertIn('"turn":"m3"', prompt)
+        self.assertIn('"reply_to":"m1"', prompt)
+
     def test_single_chunk_calls_model_once_without_lossy_reduction(self):
         model = FakeModel()
         response = summarize_safe_messages(
