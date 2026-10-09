@@ -359,6 +359,40 @@ class CliTests(unittest.TestCase):
                 else:
                     self.assertIn("Not published", output.getvalue())
 
+    def test_vision_check_uses_synthetic_image_without_telegram(self):
+        out = StringIO()
+        with (
+            patch("chatpulse.ollama_local.OllamaLocal.describe_image",
+                  return_value="Синий квадрат и жёлтый круг") as vision,
+            patch("chatpulse.group_workflow.read_selected_safe_history",
+                  side_effect=AssertionError("Must not read Telegram")),
+            redirect_stdout(out),
+        ):
+            self.assertEqual(main([
+                "vision-check", "--model", "qwen3-vl:4b-instruct"
+            ]), 0)
+        vision.assert_called_once()
+        kwargs = vision.call_args.kwargs
+        self.assertEqual(kwargs["model"], "qwen3-vl:4b-instruct")
+        self.assertEqual(kwargs["jpeg"][:2], bytes((255, 216)))
+        self.assertIn("no Telegram access", out.getvalue())
+        self.assertIn("preflight passed", out.getvalue())
+
+    def test_vision_check_displays_only_fixed_reason_for_empty_response(self):
+        from chatpulse.ollama_local import VisionDescriptionError
+        err = StringIO()
+        with (
+            patch("chatpulse.ollama_local.OllamaLocal.describe_image",
+                  side_effect=VisionDescriptionError("empty-description")),
+            redirect_stderr(err),
+            redirect_stdout(StringIO()),
+        ):
+            self.assertEqual(main([
+                "vision-check", "--model", "qwen3-vl:4b-instruct"
+            ]), 1)
+        self.assertIn("empty-description", err.getvalue())
+        self.assertNotIn("raw image", err.getvalue())
+
     def test_review_send_rejects_partial_samples_before_any_network(self):
         err = StringIO()
         with patch("chatpulse.ollama_local.OllamaLocal.ensure_local",
