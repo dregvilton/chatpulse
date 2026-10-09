@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from chatpulse.ollama_local import (
-    LocalModelError, OllamaHTTPError, OllamaLocal, assert_cloud_disabled,
+    LocalModelError, OllamaHTTPError, OllamaLocal, VisionDescriptionError,
+    assert_cloud_disabled,
     validate_local_model_name,
 )
 
@@ -139,8 +140,43 @@ class OllamaTests(unittest.TestCase):
         self.assertEqual(body["messages"][0]["images"],
                          [base64.b64encode(fake_jpeg).decode("ascii")])
         self.assertFalse(body["stream"])
+        self.assertFalse(body["think"])
+        self.assertEqual(body["options"]["num_predict"], 384)
+        self.assertEqual(body["keep_alive"], 0)
         self.assertNotIn("http", body["messages"][0]["content"])
         self.assertNotIn("PRIVATE CHAT", str(body))
+
+    def test_vision_replies_return_fixed_safe_failure_reason(self):
+        fake_jpeg = b"\xff\xd8" + b"synth-pixels" * 10
+        cases = [
+            ({"model": "qwen3-vl:4b-instruct", "done": True,
+              "message": {"content": "", "thinking": "PRIVATE VISUAL THINKING"}},
+             "empty-description"),
+            ({"model": "qwen3-vl:4b-instruct", "done": True,
+              "done_reason": "length", "message": {"content": "Truncated"}},
+             "truncated"),
+            ({"model": "qwen3-vl:4b-thinking", "done": True,
+              "message": {"content": "Wrong model"}},
+             "model-mismatch"),
+            ({"model": "qwen3-vl:4b-instruct", "done": False,
+              "message": {"content": "Incomplete"}},
+             "incomplete"),
+        ]
+        for response, reason in cases:
+            with self.subTest(reason=reason):
+                FakeHttpConnection.responses = [
+                    FakeResponse(tags("qwen3-vl:4b-instruct")),
+                    FakeResponse({"details": {"format": "gguf"}}),
+                    FakeResponse(response),
+                ]
+                with patch("chatpulse.ollama_local.http.client.HTTPConnection",
+                           FakeHttpConnection):
+                    with self.assertRaises(VisionDescriptionError) as failure:
+                        self.gateway().describe_image(
+                            model="qwen3-vl:4b-instruct", jpeg=fake_jpeg
+                        )
+                self.assertEqual(failure.exception.reason, reason)
+                self.assertNotIn("PRIVATE", str(failure.exception))
 
     def test_vision_does_not_send_oversized_payload(self):
         gateway = self.gateway()
