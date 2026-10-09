@@ -4,12 +4,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 from datetime import date, datetime, time as clock_time, timezone
+from html import escape
+import re
 import json
 import sys
 import time
 from typing import Sequence
 
-from chatpulse.privacy import RawMessage, sanitize_messages, validate_ollama_url
+from chatpulse.privacy import RawMessage, sanitize_messages, validate_ollama_url, redact_text
 from chatpulse.ollama_local import (
     LocalModelError, OllamaHTTPError, OllamaConnectionError, OllamaCompletionError,
 )
@@ -148,10 +150,59 @@ def _local_models() -> None:
         print(f"  {item.name} ({item.disk_bytes // (1024**2)} MiB on disk)")
 
 
+def _format_group_post(*, digest: str, window, message_count: int) -> str:
+    """Escape model text before applying a small, controlled Telegram HTML skin."""
+    body = escape(redact_text(digest.strip()))
+    body = re.sub(r"\\*\\*([^*\\n]{1,120})\\*\\*", r"<b>\\1</b>", body)
+    cutoff = (
+        window.end.strftime("%H:%M")
+        if window.end.date() == window.start.date() else "24:00"
+    )
+    header = (
+        "⚡ <b>CHATPULSE · ДАЙДЖЕСТ</b> ⚡\\n"
+        f"📅 <b>{window.start:%d.%m.%Y}</b> · "
+        f"{window.start:%H:%M}–{cutoff} (ЕКБ)\\n"
+        "━━━━━━━━━━━━\\n"
+    )
+    footer = (
+        "\\n━━━━━━━━━━━━\\n"
+        f"🧠 <i>Локально · {message_count} сообщений</i>"
+    )
+    rendered = header + body + footer
+    if len(rendered.encode("utf-16-le")) // 2 > 3900:
+        raise ValueError("Formatted digest is too large to send safely")
+    return rendered
+
+
+async def _send_group_post(vault, rendered: str) -> None:
+    """One requested publication to the same Telegram group as history reads."""
+    from chatpulse.telegram_auth import _make_client
+    selected = vault.load_selected_chat()
+    creds = vault.load()
+    if selected is None or creds is None:
+        raise ValueError("No approved group or Telegram login")
+    client = _make_client(creds.api_id, creds.api_hash, creds.session)
+    try:
+        await asyncio.wait_for(client.connect(), timeout=45)
+        if not await client.is_user_authorized():
+            raise ValueError("Telegram authorization expired")
+        # Do not retry an ambiguous send; the first one might have succeeded.
+        await asyncio.wait_for(
+            client.send_message(
+                selected.input_peer(), rendered, parse_mode="html",
+                link_preview=False,
+            ),
+            timeout=90,
+        )
+    finally:
+        await client.disconnect()
+
+
 def _digest_history(*, day: date | None, model: str, tone: str,
                     from_time: clock_time | None = None,
                     to_time: clock_time | None = None,
-                    sample_messages: int | None = None) -> None:
+                    sample_messages: int | None = None,
+                    send: bool = False) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.digest import summarize_safe_messages
     from chatpulse.group_workflow import read_selected_safe_history
@@ -160,6 +211,8 @@ def _digest_history(*, day: date | None, model: str, tone: str,
     # Reject invalid sampling arguments before network reads or model inference.
     if sample_messages is not None and not 20 <= sample_messages <= 250:
         raise ValueError("Sample size must be between 20 and 250 messages")
+    if send and sample_messages is not None:
+        raise ValueError("Cannot send a partial sample to the Telegram group")
 
     # Privacy gate before the first chat-history request. No Telegram content
     # is retrieved unless local model/configuration checks are successful.
@@ -203,6 +256,13 @@ def _digest_history(*, day: date | None, model: str, tone: str,
         print("(TEST SAMPLE ONLY: not representative of the entire day.)")
     print("(Local summary. No Telegram messages sent or files written.)\n")
     print(digest.text)
+    if send:
+        post = _format_group_post(
+            digest=digest.text, window=window, message_count=len(messages)
+        )
+        print("Publishing formatted digest to the approved group...", flush=True)
+        asyncio.run(_send_group_post(open_system_vault(), post))
+        print("Digest was published to the approved Telegram group.")
 
 def _logout() -> None:
     from chatpulse.credentials import open_system_vault
@@ -253,6 +313,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--sample-messages", type=int, default=None,
         help="TEST ONLY: summarize the last 20-250 messages instead of the full period"
     )
+    digest_parser.add_argument("--send", action="store_true",
+                               help="Explicitly post the finished full digest to the approved group")
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
     try:
@@ -283,7 +345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _digest_history(
                 day=args.date, model=args.model, tone=args.tone,
                 from_time=args.from_time, to_time=args.to_time,
-                sample_messages=args.sample_messages,
+                sample_messages=args.sample_messages, send=args.send,
             )
         elif args.command == "logout":
             _logout()
@@ -340,6 +402,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "Telegram did not respond in time. A login code may still "
                 "arrive; avoid repeatedly requesting new ones."
             )
+        elif args.command == "digest" and args.send:
+            message = ("Telegram delivery timed out; the message may already "
+                       "have been sent. Check the group before retrying.")
         else:
             message = "Telegram request timed out. No messages were saved."
         print(message, file=sys.stderr)
