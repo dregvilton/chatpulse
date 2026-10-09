@@ -216,6 +216,46 @@ class DigestTests(unittest.TestCase):
         self.assertIn("без мата", model.calls[0]["system"])
         self.assertTrue(all(len(x["user"]) <= 24000 for x in model.calls))
 
+    def test_intermediate_citations_filter_invented_verbatim_quotes(self):
+        import json
+        from chatpulse.digest import strip_unverified_quoted_evidence
+
+        source = "\n".join([
+            json.dumps({"author": "Participant 1", "time": "13:00",
+                        "text": "Вот это блять поворот"}),
+            json.dumps({"author": "Participant 2", "time": "13:01",
+                        "text": "Поговорим потом"}),
+        ])
+        note = (
+            "Participant 1 сказал «Вот это блять поворот». "
+            "Кто-то якобы ответил «Я всех удалю нахуй», чего не было."
+        )
+        checked = strip_unverified_quoted_evidence(note, source)
+        self.assertIn("«Вот это блять поворот»", checked)
+        self.assertNotIn("Я всех удалю нахуй", checked)
+        self.assertIn("[нет точной цитаты", checked)
+
+    def test_false_quotes_are_removed_before_final_stage(self):
+        class Fabricator:
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) <= 2:
+                    return "Случилось «Вымышленная дословная цитата»"
+                return "• Нельзя уверенно подтвердить историю"
+
+        model = Fabricator()
+        messages = [
+            safe("Participant 1", "13:00", "Сегодня обсуждали спорт " * 50)
+            for _ in range(25)
+        ]
+        summarize_safe_messages(messages, model_client=model, model="test:8b")
+        final_prompt = model.calls[-1]["user"]
+        self.assertNotIn("Вымышленная дословная цитата", final_prompt)
+        self.assertIn("[нет точной цитаты", final_prompt)
+
     def test_previous_chunk_context_is_passed_into_next_chunk(self):
         class ThreadModel:
             def __init__(self):
