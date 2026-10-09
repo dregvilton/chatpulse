@@ -17,6 +17,7 @@ from chatpulse.history import (
     DEFAULT_TIMEZONE, DigestWindow, collect_safe_history,
 )
 from chatpulse.privacy import redact_text
+from chatpulse.ollama_local import OllamaCompletionError, VisionDescriptionError
 from chatpulse.selection import (
     GroupChoice, SelectedChatHistoryClient, discover_groups,
 )
@@ -155,6 +156,7 @@ async def read_selected_safe_history(
     vision_client: Any | None = None,
     vision_model: str | None = None,
     max_images: int = 4,
+    on_vision_warning: Callable[[str], None] | None = None,
 ):
     """Only the approved group, optional capped RAM-only visual description."""
     if (vision_client is None) != (vision_model is None):
@@ -180,9 +182,10 @@ async def read_selected_safe_history(
         if not await client.is_user_authorized():
             raise TelegramAuthError("Telegram session is no longer authorized")
         analyzed = 0
+        vision_unavailable = False
 
         async def describe_attachment(item: Any) -> str | None:
-            nonlocal analyzed
+            nonlocal analyzed, vision_unavailable
             kind = image_kind(item)
             if kind is None:
                 return None
@@ -190,6 +193,8 @@ async def read_selected_safe_history(
                 return f"[{kind}: анимация пока не распознаётся]"
             emoji = getattr(getattr(item, "file", None), "emoji", None)
             prefix = f"[{kind}{' ' + emoji if isinstance(emoji, str) and len(emoji) <= 8 else ''}"
+            if vision_unavailable:
+                return prefix + ": локальное описание временно недоступно]"
             if analyzed >= max_images:
                 return prefix + ": описание пропущено (лимит)]"
             size = getattr(getattr(item, "file", None), "size", None)
@@ -206,6 +211,18 @@ async def read_selected_safe_history(
                     vision_client.describe_image, model=vision_model, jpeg=jpeg
                 )
                 return prefix + ": " + redact_text(description)[:550] + "]"
+            except OllamaCompletionError as exc:
+                # A malformed or empty local vision description must not
+                # prevent text-only summarization. Skip further visual calls
+                # this run to avoid repeatedly loading a failing model.
+                vision_unavailable = True
+                reason = (
+                    exc.reason if isinstance(exc, VisionDescriptionError)
+                    else "unusable-response"
+                )
+                if on_vision_warning is not None:
+                    on_vision_warning(reason)  # Fixed code, never model text.
+                return prefix + ": описание недоступно, учтён только факт отправки]"
             except (ValueError, OSError):
                 return prefix + ": не удалось прочитать изображение]"
 
