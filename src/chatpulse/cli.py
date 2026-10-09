@@ -148,11 +148,16 @@ def _local_models() -> None:
 
 def _digest_history(*, day: date | None, model: str, tone: str,
                     from_time: clock_time | None = None,
-                    to_time: clock_time | None = None) -> None:
+                    to_time: clock_time | None = None,
+                    sample_messages: int | None = None) -> None:
     from chatpulse.credentials import open_system_vault
     from chatpulse.digest import summarize_safe_messages
     from chatpulse.group_workflow import read_selected_safe_history
     from chatpulse.ollama_local import OllamaLocal
+
+    # Reject invalid sampling arguments before network reads or model inference.
+    if sample_messages is not None and not 20 <= sample_messages <= 250:
+        raise ValueError("Sample size must be between 20 and 250 messages")
 
     # Privacy gate before the first chat-history request. No Telegram content
     # is retrieved unless local model/configuration checks are successful.
@@ -167,6 +172,15 @@ def _digest_history(*, day: date | None, model: str, tone: str,
     if not messages:
         print("No text messages found in the selected time window.")
         return
+    full_count = len(messages)
+    if sample_messages is not None:
+        messages = messages[-sample_messages:]
+        print(
+            f"TEST SAMPLE: using last {len(messages)} of {full_count} messages "
+            f"({messages[0].time}–{messages[-1].time} local). "
+            "This is NOT a full-day digest.",
+            flush=True,
+        )
     print(f"Summarizing {len(messages)} redacted messages in memory...", flush=True)
     started = time.monotonic()
     digest = summarize_safe_messages(
@@ -183,6 +197,8 @@ def _digest_history(*, day: date | None, model: str, tone: str,
           f"({window.start.strftime('%H:%M')}–{cutoff}, Asia/Yekaterinburg)")
     if not finished:
         print("(Snapshot: new messages may arrive after this run.)")
+    if sample_messages is not None:
+        print("(TEST SAMPLE ONLY: not representative of the entire day.)")
     print("(Local summary. No Telegram messages sent or files written.)\n")
     print(digest.text)
 
@@ -231,6 +247,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                                help="Local HH:MM start (default 00:00)")
     digest_parser.add_argument("--to-time", type=clock_time.fromisoformat, default=None,
                                help="Local HH:MM cutoff (default now today, 24:00 past days)")
+    digest_parser.add_argument(
+        "--sample-messages", type=int, default=None,
+        help="TEST ONLY: summarize the last 20-250 messages instead of the full period"
+    )
     sub.add_parser("logout", help="Revoke Telegram session remotely, then remove local secret")
     args = parser.parse_args(argv)
     try:
@@ -261,6 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _digest_history(
                 day=args.date, model=args.model, tone=args.tone,
                 from_time=args.from_time, to_time=args.to_time,
+                sample_messages=args.sample_messages,
             )
         elif args.command == "logout":
             _logout()
