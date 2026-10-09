@@ -82,12 +82,17 @@ def message_rows(messages: Sequence[SafeMessage], *, row_chars: int = 6000) -> l
             for start in range(0, len(message.text), split_size)
         ]
         for i, piece in enumerate(pieces):
-            row = json.dumps({
+            payload = {
                 "author": message.author,
                 "time": message.time,
                 "text": piece,
                 "part": f"{i + 1}/{len(pieces)}",
-            }, ensure_ascii=False, separators=(",", ":"))
+            }
+            if message.turn:
+                payload["turn"] = message.turn
+            if message.reply_to_turn:
+                payload["reply_to"] = message.reply_to_turn
+            row = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             if len(row) > row_chars:
                 raise DigestError("Chat row is too large for local inference")
             result.append(row)
@@ -243,6 +248,8 @@ def summarize_safe_messages(
             "Не додумывай, кто загрузил фото, что человек чувствовал, "
             "как он отреагировал и к чему «пришли» без подтверждения. "
             "Объединяй связанный разговор в один пункт. "
+            "Если сообщение содержит reply_to, это ответ на turn, "
+            "а не обязательно на соседнюю реплику; не путай ветки. "
             "Не используй настоящие имена и ники из сообщений: только "
             "Participant N, если без автора вообще непонятно. "
             "Короткие цитаты — только дословные фразы из переписки. "
@@ -275,7 +282,10 @@ def summarize_safe_messages(
             )
         instruction = (
             "Читай чат как ОДИН непрерывный разговор, не как отдельные "
-            "тематические пачки. В начале фрагмента диалог может "
+            "тематические пачки. Поле reply_to ссылается на turn другого "
+            "сообщения, это связь ответа: используй её для разделения "
+            "параллельных разговоров, а не только близость по времени. "
+            "В начале фрагмента диалог может "
             "продолжаться с прошлого; не выдумывай новый сюжет. "
             "Из НОВЫХ реплик выдели до 4 существенных эпизодов; "
             "сохраняй, какой начатый спор/подкол продолжился, чем "
