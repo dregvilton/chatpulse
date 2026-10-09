@@ -18,6 +18,10 @@ from chatpulse.ollama_local import (
 from chatpulse.digest import DigestError
 
 
+class VisionSetupError(RuntimeError):
+    """Missing local optional image conversion package."""
+
+
 def _interactive_only() -> None:
     if not sys.stdin.isatty() or not sys.stderr.isatty():
         raise RuntimeError("Login/logout requires an interactive terminal")
@@ -217,6 +221,11 @@ def _digest_history(*, day: date | None, model: str, tone: str,
 
     # Privacy gate before the first chat-history request. No Telegram content
     # is retrieved unless local model/configuration checks are successful.
+    if vision_model is not None:
+        try:
+            from PIL import Image  # noqa: F401 - optional image dependency check
+        except ImportError:
+            raise VisionSetupError from None
     local = OllamaLocal()
     local.ensure_local(model)
     if vision_model is not None:
@@ -375,6 +384,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (KeyboardInterrupt, EOFError):
         print("\nCancelled.", file=sys.stderr)
         return 130
+    except VisionSetupError:
+        print(
+            "Optional local image processing is not installed. Run: "
+            "python -m pip install -e '.[vision]' (then retry). "
+            "No Telegram history was read.",
+            file=sys.stderr,
+        )
+        return 1
     except LocalModelError as exc:
         # Never print arbitrary exception text, response bodies, prompts,
         # message content, or model names. Only fixed diagnostics and status.
