@@ -51,8 +51,12 @@ Model processing can take substantial time on less powerful machines.
 ## Optional image/sticker comprehension
 
 Photos and static WebP stickers are excluded unless `--vision-model` is
-explicitly supplied. Install with `pip install -e '.[vision]'`, pull
-`qwen3-vl:4b` deliberately, then use `--vision-model qwen3-vl:4b
+explicitly supplied. Use `chatpulse vision-check --model qwen3-vl:4b-instruct`
+to validate local visual inference first on an in-memory synthetic image,
+without ever contacting Telegram. A failed optional visual caption logs
+only a fixed reason code and continues with text-only chat context.
+Local model verification failures remain fatal. Install with `pip install -e '.[vision]'`, pull
+`qwen3-vl:4b-instruct` deliberately, then use `--vision-model qwen3-vl:4b-instruct
 --max-images 4`. Each media file must advertise a size no greater than
 3 MB; decoding and JPEG resizing (maximum 768 pixels per side) happen
 in RAM, with at most 4 images by default and an absolute cap of 8.
