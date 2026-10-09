@@ -8,6 +8,17 @@ from chatpulse.cli import main
 
 
 class CliTests(unittest.TestCase):
+    def setUp(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        self.tempdir = TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        path = Path(self.tempdir.name) / "ratings.json"
+        override = patch("chatpulse.ratings.rating_file_path", return_value=path)
+        override.start()
+        self.addCleanup(override.stop)
+
     def test_demo_and_doctor_without_network(self):
         output = StringIO()
         with redirect_stdout(output):
@@ -296,6 +307,19 @@ class CliTests(unittest.TestCase):
         self.assertIn("Digest was published", out.getvalue())
         self.assertIn("Telegram publication was requested", out.getvalue())
         self.assertNotIn("No Telegram messages sent", out.getvalue())
+        self.assertIn("chatpulse rate 1..5", out.getvalue())
+        rated = StringIO()
+        with redirect_stdout(rated):
+            self.assertEqual(main(["rate", "4"]), 0)
+        self.assertIn("saved locally", rated.getvalue())
+
+    def test_rating_without_digest_is_non_network_operation(self):
+        output = StringIO()
+        with patch("chatpulse.ollama_local.OllamaLocal.ensure_local",
+                   side_effect=AssertionError("no Ollama")):
+            with redirect_stderr(output):
+                self.assertEqual(main(["rate", "5"]), 1)
+        self.assertIn("Rating failed", output.getvalue())
 
     def test_remote_doctor_rejected_without_printing_endpoint(self):
         err = StringIO()
