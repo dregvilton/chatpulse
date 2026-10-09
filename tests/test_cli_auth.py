@@ -313,6 +313,65 @@ class CliTests(unittest.TestCase):
             self.assertEqual(main(["rate", "4"]), 0)
         self.assertIn("saved locally", rated.getvalue())
 
+    def test_review_send_publishes_once_only_after_explicit_send(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from chatpulse.history import DigestWindow
+        from chatpulse.digest import DigestResult
+        from chatpulse.privacy import SafeMessage
+        from unittest.mock import AsyncMock
+
+        tz = ZoneInfo("Asia/Yekaterinburg")
+        async def fake_history(*args, **kwargs):
+            return (
+                DigestWindow(datetime(2026, 10, 9, 0, tzinfo=tz),
+                             datetime(2026, 10, 9, 18, tzinfo=tz)),
+                False, [SafeMessage("Participant 1", "12:00", "PRIVATE SOURCE")],
+            )
+
+        for confirmation, expected_sends in (("", 0), ("yes", 0), ("SEND", 1)):
+            with self.subTest(confirmation=confirmation):
+                delivery = AsyncMock()
+                output = StringIO()
+                with (
+                    patch("chatpulse.cli._interactive_only"),
+                    patch("builtins.input", return_value=confirmation) as prompt,
+                    patch("chatpulse.ollama_local.OllamaLocal.ensure_local"),
+                    patch("chatpulse.group_workflow.read_selected_safe_history",
+                          side_effect=fake_history) as history,
+                    patch("chatpulse.credentials.open_system_vault",
+                          return_value=object()),
+                    patch("chatpulse.digest.summarize_safe_messages",
+                          return_value=DigestResult("• Synthetic joke", 1, 1)) as digest,
+                    patch("chatpulse.cli._send_group_post", delivery),
+                    redirect_stdout(output),
+                ):
+                    self.assertEqual(main([
+                        "digest", "--model", "test:8b", "--review-send",
+                    ]), 0)
+                prompt.assert_called_once()
+                history.assert_awaited_once() if hasattr(history, "assert_awaited_once") else self.assertEqual(history.call_count, 1)
+                digest.assert_called_once()
+                self.assertEqual(delivery.await_count, expected_sends)
+                if expected_sends:
+                    self.assertIn("Synthetic joke", delivery.await_args.args[1])
+                    self.assertIn("Digest was published", output.getvalue())
+                else:
+                    self.assertIn("Not published", output.getvalue())
+
+    def test_review_send_rejects_partial_samples_before_any_network(self):
+        err = StringIO()
+        with patch("chatpulse.ollama_local.OllamaLocal.ensure_local",
+                   side_effect=AssertionError("unexpected Ollama")), \
+             patch("chatpulse.group_workflow.read_selected_safe_history",
+                   side_effect=AssertionError("unexpected Telegram")), \
+             redirect_stderr(err):
+            self.assertEqual(main([
+                "digest", "--model", "test:8b",
+                "--sample-messages", "100", "--review-send",
+            ]), 1)
+        self.assertIn("Operation failed", err.getvalue())
+
     def test_rating_without_digest_is_non_network_operation(self):
         output = StringIO()
         with patch("chatpulse.ollama_local.OllamaLocal.ensure_local",
