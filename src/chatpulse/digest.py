@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import json
+import re
 from typing import Protocol
 
 from chatpulse.privacy import SafeMessage, redact_text
@@ -186,6 +187,36 @@ def group_conversation_rows(
     return chunks
 
 
+
+_QUOTE = re.compile(r"«([^«»\n]{3,180})»")
+
+
+def strip_unverified_quoted_evidence(note: str, source_rows: str) -> str:
+    """Remove invented «verbatim quotes» from model-written interim notes.
+
+    Only positive exact matches inside the supplied *new* chat JSON rows
+    count as verified: punctuation or whitespace rewrites are deliberately
+    not treated as verbatim. Non-quoted model prose is still fallible.
+    """
+    source_texts: list[str] = []
+    for line in source_rows.splitlines():
+        try:
+            source = json.loads(line)
+            value = source.get("text") if isinstance(source, dict) else None
+            if isinstance(value, str):
+                source_texts.append(value)
+        except ValueError:
+            continue
+
+    def check(match: re.Match[str]) -> str:
+        quote = match.group(1)
+        if any(quote in original for original in source_texts):
+            return match.group(0)
+        return "[нет точной цитаты в этом фрагменте]"
+
+    return _QUOTE.sub(check, note)
+
+
 def overlap_rows(chunk: str, *, max_chars: int = 1300) -> str:
     """Carry complete preceding JSON rows across boundaries as context only."""
     if not 0 <= max_chars <= 2000:
@@ -297,6 +328,7 @@ def summarize_safe_messages(
             "и Participant N, если метки есть; без меток — время "
             "и Participant N, (3) чем ответили или продолжили, "
             "только если это видно в сообщениях. "
+            "Все дословные цитаты обрамляй «ёлочками». "
             "Цитаты должны встречаться именно в text исходных JSON-строк: "
             "никаких кавычек вокруг пересказов. "
             "Следи за reply_to — соседние реплики могут относиться "
@@ -321,7 +353,9 @@ def summarize_safe_messages(
         )
         if not isinstance(note, str) or not note.strip() or len(note) > 8000:
             raise DigestError("Invalid intermediate model output")
-        intermediate.append(redact_text(note))
+        # Trust exact message text over model-made "quotes". Previous
+        # context was already processed earlier; it isn't new evidence.
+        intermediate.append(redact_text(strip_unverified_quoted_evidence(note, chunk)))
         if on_progress is not None:
             on_progress(index, len(chunks))
 
